@@ -413,6 +413,8 @@
     color:var(--bg-void); background:var(--amber); padding:2px 7px; border-radius:2px; flex-shrink:0;
   }
   .round-head .rq{font-size:12px; color:var(--text-main); line-height:1.5; word-break:break-word; white-space:pre-wrap;}
+  .img-desc{font-size:11px; color:var(--text-dim); border:1px dashed var(--green-dim); border-radius:2px; padding:6px 8px; margin:0 0 10px;}
+  .img-desc summary{cursor:pointer; color:var(--amber);}
   .round-files{font-size:9.5px; color:var(--text-dim); margin-bottom:8px;}
 
   .linkbtn{
@@ -554,6 +556,9 @@
   .card li{margin-bottom:4px; font-size:12.5px; line-height:1.6; color:var(--text-main);}
   .card details p, .card details ul, .card details ol{margin-top:6px;}
   .hl{color:var(--green-bright); font-weight:700;}
+  .card-head .ai.fo{color:var(--amber); border-color:var(--amber-dim);}
+  .fo-note{font-size:9.5px; color:var(--amber); border:1px dashed var(--amber-dim);
+    border-radius:2px; padding:4px 6px; margin:5px 0 7px; line-height:1.5;}
   .partial-note{
     font-size:9.5px; color:var(--amber); border:1px solid var(--amber-dim);
     border-radius:2px; padding:4px 6px; margin:5px 0 7px; line-height:1.5;
@@ -845,6 +850,10 @@
       <input type="checkbox" id="diffModelToggle">
       <label style="margin:0;">노드별로 다른 AI 사용 (고급)</label>
     </div>
+    <label class="strict-line">
+      <input type="checkbox" id="failoverToggle">
+      <span><b>자동 대체</b> — 모델이 한도 초과·오류로 실패하면 Gemini Flash-Lite가 키를 입력해 둔 회사들의 모델 중 원래 모델과 성능이 가장 비슷한 모델을 골라 이어서 연산합니다. 대체 모델은 30분간 유지됩니다. 원래 모델이 무료면 무료 모델 중에서만 고릅니다. (Gemini 키가 없으면 모델 이름 기준으로 고릅니다)</span>
+    </label>
 
     <div class="adv-models" id="advModels">
       <div class="hint" style="margin:0 0 8px;">노드마다 다른 회사를 고를 수 있습니다. 고른 회사의 API 키는 위 탭에서 각각 입력해 두세요.</div>
@@ -899,7 +908,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v1.11.4</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v1.13.0</span></footer>
 </div>
 
 <script>
@@ -1021,6 +1030,7 @@ const codeDetail = $('codeDetail');
 const modelFilter = $('modelFilter');
 const freeOnlyToggle = $('freeOnlyToggle');
 const solveToggle = $('solveToggle');
+const failoverToggle = $('failoverToggle');
 const fetchModelsBtn = $('fetchModelsBtn');
 const modelListResult = $('modelListResult');
 const questionInput = $('questionInput');
@@ -1063,7 +1073,7 @@ const fileInput = $('fileInput');
 const fileChips = $('fileChips');
 const attachNote = $('attachNote');
 
-let state = { busy:false, codeNum:132, raw:{}, provider:'openrouter', keys:{}, files:[], history:[], round:0, modelCache:{}, probeCache:{}, probeSeq:0 };
+let state = { busy:false, codeNum:132, raw:{}, provider:'openrouter', keys:{}, files:[], history:[], round:0, modelCache:{}, probeCache:{}, probeSeq:0, failover:{}, noVision:{}, descCache:{}, roundConverted:{} };
 
 /* ---------------------------------------------------------------------
    Utilities
@@ -1512,6 +1522,7 @@ function applySettingsToForm(obj){
   });
   debugToggle.checked = !!obj.debug;
   solveToggle.checked = !!obj.solve;
+  failoverToggle.checked = !!obj.failover;
   refreshNodeRoles();
   if(obj.freeOnly !== undefined) freeOnlyToggle.checked = !!obj.freeOnly;
   renderAllNodeModelOptions();
@@ -1531,6 +1542,7 @@ async function doSave(){
     nodeProviders: SLOTS.reduce((o,slot)=>{ const f=provField(slot); o[slot]=f?f.value:''; return o; }, {}),
     debug: debugToggle.checked,
     solve: solveToggle.checked,
+    failover: failoverToggle.checked,
     freeOnly: freeOnlyToggle.checked
   };
   try{
@@ -1636,7 +1648,7 @@ function providerSupportsPDF(p){ return p==='claude' || p==='gemini'; }
 // Phase 1 is the only stage that receives files, so check those three nodes.
 function pdfBlockers(){
   const pdfs = binaryFiles().filter(f=>f.kind==='pdf');
-  if(!pdfs.length) return [];
+  if(!pdfs.length || canConvert()) return [];
   const bad = [];
   NODE_ORDER.forEach(k=>{
     const c = nodeConfig(k);
@@ -2144,6 +2156,8 @@ async function callAndParse(provider, apiKey, model, sys, user, temp, maxTok, re
       if(err.code === 'CANCELLED') throw err;
       // Auth and credit problems will not fix themselves on a retry.
       if(/유효하지 않|크레딧이 부족|차단/.test(err.message||'')) throw err;
+      // A rate limit will not clear within a second; retrying only burns quota.
+      if(err.code === '003') throw err;
     }
   }
   // Got text but could not parse it: keep the text rather than failing the node.
@@ -2242,6 +2256,8 @@ async function verifyApiKey(){
    Model names change often, so ask the provider instead of hardcoding.
 --------------------------------------------------------------------- */
 let freeModelIds = new Set();
+// OpenRouter models whose listed input modalities include images (null = list not loaded).
+let orVision = null;
 
 function isChatModelId(provider, id){
   const s = id.toLowerCase();
@@ -2302,6 +2318,10 @@ async function fetchModelList(provider, key){
   const free = all.filter(isFree).map(m=>m.id).sort();
   const rest = all.filter(m=>!isFree(m)).map(m=>m.id).sort();
   freeModelIds = new Set(free);
+  orVision = new Set(all.filter(m=>{
+    const a = m.architecture || {};
+    return (a.input_modalities || []).indexOf('image') !== -1 || /image/.test(String(a.modality || '').split('->')[0]);
+  }).map(m=>m.id));
   freeModelIds.add('openrouter/free');
   const ordered = ['openrouter/free'].concat(free, rest);
   return ordered.filter((id,i)=>ordered.indexOf(id)===i);
@@ -2473,17 +2493,18 @@ function refreshSubmitGate(){
   let bad = null;
   const staleSlots = [];
   for(const slot of SLOTS){
-    const cfg = nodeConfig(slot);
+    const cfg = runConfig(slot);
     const id = cfg.provider + '|' + cfg.model;
     const c = state.probeCache[id];
     if(!c) continue;                      // never checked - nothing to gate on yet
     if(!isCacheFresh(id)){ staleSlots.push(slot); continue; }
     if(c.code !== '000'){ bad = { slot:slot, code:c.code }; break; }
   }
-  submitBtn.disabled = !!bad;
+  submitBtn.disabled = !!bad && !failoverOn();
   if(bad){
     const info = ERROR_CODES[bad.code] || ERROR_CODES['010'];
-    submitGateNote.textContent = '⚠ ' + SLOT_LABEL[bad.slot] + '의 모델을 지금 사용할 수 없습니다 (' + info.t + ' [' + bad.code + ']). 설정에서 모델을 바꾸세요.';
+    submitGateNote.textContent = '⚠ ' + SLOT_LABEL[bad.slot] + '의 모델을 지금 사용할 수 없습니다 (' + info.t + ' [' + bad.code + ']). ' +
+      (failoverOn() ? '심의를 시작하면 자동 대체 모델로 바꿉니다.' : '설정에서 모델을 바꾸세요.');
     submitGateNote.hidden = false;
   } else {
     submitGateNote.hidden = true;
@@ -2768,10 +2789,18 @@ function cardEl(key, phase){
   return el;
 }
 function cardHead(node, right, rightCls, slotKey){
-  let ai = '';
+  let ai = '', foNote = '';
   if(slotKey){
-    const c = nodeConfig(slotKey);
+    const c = runConfig(slotKey);
     ai = '<span class="ai" title="' + escapeHtml(c.model) + '">' + PROVIDERS[c.provider].label + '</span>';
+    if(c.replaced){
+      ai += '<span class="ai fo" title="원래: ' + escapeHtml(c.from.model) + '">대체</span>';
+      foNote = '<div class="fo-note">원래 모델 ' + escapeHtml(PROVIDERS[c.from.provider].label + ' ' + c.from.model) +
+        ' 사용 불가 → ' + escapeHtml(PROVIDERS[c.provider].label + ' ' + c.model) + ' 로 자동 대체</div>';
+    }
+  }
+  if(slotKey && state.roundConverted[slotKey]){
+    foNote += '<div class="fo-note">이 모델은 첨부 파일을 직접 볼 수 없어 Gemini가 텍스트로 옮긴 내용을 바탕으로 답했습니다</div>';
   }
   return '<div class="card-head">' +
       '<span class="idx">' + node.num + '</span>' +
@@ -2779,7 +2808,7 @@ function cardHead(node, right, rightCls, slotKey){
       '<span class="rl">' + node.kr + '</span>' +
       ai +
       '<span class="cf ' + (rightCls||'') + '">' + right + '</span>' +
-    '</div>';
+    '</div>' + foNote;
 }
 function renderLoadingCard(key, phase){
   const node = NODES[key];
@@ -2920,6 +2949,8 @@ function renderFinal(fin, p2results){
   if(lbl) lbl.textContent = fin.verdict
     ? 'FINAL_VERDICT ── 통합 판단 AI'
     : 'FINAL_ANSWER ── 통합 판단 AI';
+  const foS = runConfig('supreme');
+  if(lbl && foS.replaced) lbl.textContent += ' · 자동 대체: ' + PROVIDERS[foS.provider].label + ' ' + foS.model;
   wrap.querySelector('[data-role="answer"]').innerHTML = mdLite(fin.final_answer);
   wrap.querySelector('[data-role="reasoning"]').innerHTML = mdLite(fin.reasoning);
   renderMathIn(wrap);
@@ -3012,8 +3043,7 @@ async function runPhase1(question, atts){
 
   const tasks = NODE_ORDER.map(k=>{
     const node = NODES[k];
-    const cfg = nodeConfig(k);
-    return callAndParse(cfg.provider, keyFor(cfg.provider), cfg.model, sysFor(k, 1),
+    return callSlot(k, 'p1', sysFor(k, 1),
                         buildPhase1Prompt(question), tempFor(k), 1400,
                         ['answer','conclusion','결론'], atts)
       .then(r=>{
@@ -3053,9 +3083,8 @@ async function runPhase2(question, phase1Results){
     const own = phase1Results[k];
     const others = NODE_ORDER.filter(x=>x!==k).map(x=>({ node:NODES[x], data:phase1Results[x] }));
     const prompt = buildPhase2Prompt(question, node, own, others);
-    const cfg = nodeConfig(k);
     // Phase 2 reasons over Phase 1 text, so attachments are not resent.
-    return callAndParse(cfg.provider, keyFor(cfg.provider), cfg.model, sysFor(k, 2), prompt,
+    return callSlot(k, 'p2', sysFor(k, 2), prompt,
                         tempFor(k), 2600, ['answer','conclusion','결론'])
       .then(r=>{
         state.raw[k] = state.raw[k] || {}; state.raw[k].p2 = r.raw;
@@ -3094,8 +3123,7 @@ async function runPhase2(question, phase1Results){
 
 async function runFinal(question, phase2Results){
   const prompt = buildFinalPrompt(question, phase2Results);
-  const cfg = nodeConfig('supreme');
-  const r = await callAndParse(cfg.provider, keyFor(cfg.provider), cfg.model, sysForSupreme(),
+  const r = await callSlot('supreme', null, sysForSupreme(),
                                prompt, 0.4, 1800, ['final_answer','finalAnswer','verdict','판정']);
   state.raw.supreme = r.raw;
   return normalizeFinalResult(r.parsed, r.raw);
@@ -3152,17 +3180,253 @@ function isCacheFresh(id){
 
 // A real, live check right before the run — a badge checked minutes ago
 // (especially for volatile free-tier models) is not proof it still works now.
+/* ---------------------------------------------------------------------
+   Auto failover: when a slot's model fails, Gemini Flash-Lite picks the
+   most similar model among providers the user has keys for.
+--------------------------------------------------------------------- */
+const FAILOVER_TTL_MS = 30 * 60 * 1000;
+const NON_CHAT_RE = /embed|tts|audio|imagen|image-gen|veo|whisper|dall-e|moderation|transcri|realtime|lyria|aqa|robotics|computer-use|live|guard/i;
+function failoverOn(){ return !!(failoverToggle && failoverToggle.checked); }
+// The config a slot actually runs on: its replacement while one is active
+// for the same original selection, otherwise the user's own choice.
+function runConfig(slot){
+  const base = nodeConfig(slot);
+  const f = state.failover[slot];
+  if(failoverOn() && f && f.from === base.provider + '|' + base.model && (Date.now() - f.ts) < FAILOVER_TTL_MS){
+    return { provider:f.provider, model:f.model, replaced:true, from:base };
+  }
+  return base;
+}
+function selectorModel(){
+  const ver = id => { const m = id.match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
+  const pre = id => /preview|exp/i.test(id) ? 1 : 0;
+  const ids = modelsFor('gemini').map(id=>id.replace(/^models\//,'')).filter(id=>/flash-lite/i.test(id));
+  ids.sort((a,b)=> (ver(b) - ver(a)) || (pre(a) - pre(b)));
+  return ids[0] || 'gemini-2.5-flash-lite';
+}
+async function failoverCandidates(base, code, atts, tried){
+  const freeOnly = isFreeModel(base.model) || base.provider === 'gemini';
+  const out = [];
+  for(const p of Object.keys(PROVIDERS)){
+    const key = keyFor(p);
+    if(!key) continue;
+    if(freeOnly && (p === 'claude' || p === 'gpt')) continue;
+    // OpenRouter's free quota is per account, so other free models are blocked too.
+    if(p === 'openrouter' && freeOnly && code === '003' && base.provider === 'openrouter') continue;
+    if(!state.modelCache[p]){
+      try{ const ids = await fetchModelList(p, key); if(ids.length) state.modelCache[p] = ids; }catch(e){}
+    }
+    modelsFor(p).forEach(raw=>{
+      const id = p === 'gemini' ? raw.replace(/^models\//,'') : raw;
+      if(NON_CHAT_RE.test(id) || id === 'openrouter/free') return;
+      if(p === 'openrouter' && freeOnly && !isFreeModel(id)) return;
+      const k = p + '|' + id;
+      if(tried.indexOf(k) !== -1) return;
+      const c = state.probeCache[k];
+      if(c && c.code !== '000' && isCacheFresh(k)) return;
+      out.push({ provider:p, model:id });
+    });
+  }
+  return out.slice(0, 300);
+}
+function heuristicPick(base, cands){
+  const vendor = (base.model.split('/')[0] || '').toLowerCase();
+  const tokens = base.model.toLowerCase().split(/[\/\-:_.]+/).filter(t=>t.length>2 && !/^(free|latest|preview|instruct|chat)$/.test(t));
+  let best = null, bestScore = -1;
+  cands.forEach(c=>{
+    const m = c.model.toLowerCase();
+    let sc = 0;
+    tokens.forEach(t=>{ if(m.indexOf(t) !== -1) sc += 2; });
+    if(vendor && m.indexOf(vendor) !== -1) sc += 1;
+    if(sc > bestScore){ best = c; bestScore = sc; }
+  });
+  return best ? Object.assign({ reason:'모델 이름 유사도 기준', by:'heuristic' }, best) : null;
+}
+const SELECTOR_SYS = '당신은 AI 모델 선택기입니다. 사용자가 고른 원래 모델이 실패했습니다. 후보 목록에서 원래 모델과 추론력·지식·지시 이행·한국어 능력이 가장 비슷한 모델 하나를 고르십시오. 같은 세대·비슷한 크기의 모델을 우선하고, 원래 모델보다 확연히 약한 소형 모델이나 특수 목적 모델(코드 전용, 임베딩, 이미지 생성 등)은 피하십시오. provider와 model은 후보 목록에 적힌 문자열을 한 글자도 바꾸지 말고 그대로 쓰십시오.\n반드시 아래 JSON으로만 답하십시오.\n{"provider": "후보의 provider", "model": "후보의 model", "reason": "고른 이유 한 문장"}';
+async function pickReplacement(base, code, atts, tried){
+  const cands = await failoverCandidates(base, code, atts, tried);
+  if(!cands.length) return null;
+  const gkey = keyFor('gemini');
+  if(gkey){
+    const user = '[실패한 원래 모델]\n' + base.provider + '|' + base.model + ' (오류 코드 ' + (code || '알 수 없음') + ')\n' +
+      (atts && atts.length && !canConvert() ? '[조건] 이미지·파일 입력을 지원하는 모델만 고르십시오.\n' : '') +
+      '\n[후보 목록 — provider|model]\n' + cands.map(c=>c.provider + '|' + c.model).join('\n');
+    try{
+      const r = await callAndParse('gemini', gkey, selectorModel(), SELECTOR_SYS, user, 0, 1500, ['model']);
+      const o = r.parsed || {};
+      let pm = String(pick(o, ['model']) || '').trim();
+      let pp = String(pick(o, ['provider']) || '').trim().toLowerCase();
+      if(pm.indexOf('|') !== -1 && !pp){ pp = pm.split('|')[0]; pm = pm.split('|').slice(1).join('|'); }
+      const hit = cands.find(c=>c.model === pm && c.provider === pp) || cands.find(c=>c.model === pm);
+      if(hit) return Object.assign({ reason:String(pick(o, ['reason']) || ''), by:'gemini' }, hit);
+    }catch(e){ if(e.code === 'CANCELLED') throw e; }
+  }
+  return heuristicPick(base, cands);
+}
+function setFailover(slot, base, pk){
+  state.failover[slot] = { provider:pk.provider, model:pk.model, from:base.provider + '|' + base.model, ts:Date.now(), reason:pk.reason };
+}
+// Before the run: swap out slots the availability check already knows are down.
+async function preflightFailover(slot, failedId, code, atts){
+  const base = nodeConfig(slot);
+  const tried = [failedId.replace(/\|att$/,''), base.provider + '|' + base.model];
+  for(let i=0; i<2; i++){
+    const pk = await pickReplacement(base, code, atts, tried);
+    if(!pk) return false;
+    const id = pk.provider + '|' + pk.model + (atts.length ? '|att' : '');
+    tried.push(pk.provider + '|' + pk.model);
+    const r = isCacheFresh(id) ? state.probeCache[id]
+      : await probeModel(pk.provider, keyFor(pk.provider), pk.model, atts);
+    r.ts = r.ts || Date.now();
+    state.probeCache[id] = r;
+    if(r.code === '000'){ setFailover(slot, base, pk); return true; }
+  }
+  return false;
+}
+function renderSwitchingCard(key, phase){
+  if(!phase) return;
+  const el = cardEl(key, phase);
+  if(!el) return;
+  el.classList.remove('err');
+  el.innerHTML = cardHead(NODES[key], '대체 중...', '', key) +
+    '<div class="confbar-track"><div class="confbar-fill" style="width:20%"></div></div>' +
+    '<p style="color:var(--amber)">모델이 응답하지 않아 대체 모델을 고르는 중입니다...</p>';
+}
+// During the run: a call failed mid-deliberation, pick a replacement and retry.
+async function callSlot(slot, phase, sys, user, temp, maxTok, requiredKeys, atts){
+  const cfg = runConfig(slot);
+  try{
+    return await callOn(slot, cfg, sys, user, temp, maxTok, requiredKeys, atts);
+  }catch(err){
+    if(err.code === 'CANCELLED' || !failoverOn() || state.cancelled) throw err;
+    const base = nodeConfig(slot);
+    const tried = [base.provider + '|' + base.model, cfg.provider + '|' + cfg.model];
+    let lastErr = err, found = false;
+    renderSwitchingCard(slot, phase);
+    for(let i=0; i<2; i++){
+      if(state.cancelled) break;
+      const pk = await pickReplacement(base, lastErr.code, atts, tried);
+      if(!pk) break;
+      found = true;
+      tried.push(pk.provider + '|' + pk.model);
+      setFailover(slot, base, pk);
+      if(phase) renderLoadingCard(slot, phase);
+      try{
+        return await callOn(slot, pk, sys, user, temp, maxTok, requiredKeys, atts);
+      }catch(e2){
+        if(e2.code === 'CANCELLED') throw e2;
+        lastErr = e2;
+        delete state.failover[slot];
+      }
+    }
+    lastErr.message = (lastErr.message || '연산 실패') + (found ? ' (자동 대체 모델도 실패)' : ' (대체할 수 있는 모델이 없음)');
+    throw lastErr;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Attachment conversion: models that cannot read an image (or a PDF) get
+   a Gemini-written text transcription of the file instead.
+--------------------------------------------------------------------- */
+function canConvert(){ return !!keyFor('gemini'); }
+function canTakeFile(cfg, kind){
+  if(state.noVision[cfg.provider + '|' + cfg.model]) return false;
+  if(kind === 'pdf') return providerSupportsPDF(cfg.provider);
+  if(cfg.provider === 'gemini' || cfg.provider === 'claude') return true;
+  if(cfg.provider === 'gpt') return !/gpt-3\.5|o1-mini|o3-mini|^o1-preview/i.test(cfg.model);
+  if(cfg.provider === 'openrouter'){
+    if(cfg.model === 'openrouter/free' || !orVision) return true;   // unknown: learn from the probe/run
+    return orVision.has(cfg.model);
+  }
+  return true;
+}
+function splitAtts(cfg, atts){
+  const direct = [], convert = [];
+  (atts || []).forEach(f=>{ (canTakeFile(cfg, f.kind) ? direct : convert).push(f); });
+  return { direct, convert };
+}
+function describerModel(){
+  const ver = id => { const m = id.match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
+  const pre = id => /preview|exp/i.test(id) ? 1 : 0;
+  const ids = modelsFor('gemini').map(id=>id.replace(/^models\//,''))
+    .filter(id=>/flash/i.test(id) && !/lite|image|tts|live|audio|embed/i.test(id));
+  ids.sort((a,b)=> (ver(b) - ver(a)) || (pre(a) - pre(b)));
+  return ids[0] || selectorModel();
+}
+const DESCRIBE_SYS = '당신은 첨부 파일 판독기입니다. 다른 AI는 이 파일을 직접 볼 수 없고 당신이 쓴 설명만 읽습니다. 그 AI가 설명만으로 질문에 답할 수 있도록 내용을 빠짐없이 텍스트로 옮기십시오.\n- 인쇄된 글자는 한 글자도 바꾸지 말고 그대로 옮기십시오. 문제 번호, 조건, 보기(ㄱ, ㄴ, ㄷ), 선택지(①~⑤)도 모두 포함하십시오.\n- 수식은 $...$ 로 감싼 LaTeX로 쓰십시오.\n- 표는 행과 열을 구분해 옮기십시오.\n- 그림·그래프·도형은 라벨, 수치, 단위, 화살표 방향, 위치 관계를 구체적으로 묘사하십시오.\n- 손글씨 메모나 채점 표시는 [손글씨: ...] 로 따로 표시하십시오.\n- 문제를 풀거나 해석하지 마십시오. 보이는 것만 옮기십시오.\n- 한국어로 쓰십시오.\n반드시 아래 JSON으로만 답하십시오.\n{"description": "파일 내용 전체"}';
+function describeFiles(files){
+  const key = files.map(f=>f.name + ':' + String(f.data || '').length).join('|');
+  if(!state.descCache[key]){
+    state.descCache[key] = (async ()=>{
+      const user = '[사용자의 질문]\n' + (state.curQuestion || '') + '\n\n[첨부 파일] ' + files.map(f=>f.name).join(', ');
+      let lastErr = null;
+      for(const m of [describerModel(), selectorModel()]){
+        try{
+          const r = await callAndParse('gemini', keyFor('gemini'), m, DESCRIBE_SYS, user, 0.1, 4000, ['description'], files);
+          const d = r.parsed ? String(pick(r.parsed, ['description','내용']) || '') : grabField(r.raw, ['description']);
+          if(d.trim()){ showDescInRound(d); return d; }
+        }catch(e){ if(e.code === 'CANCELLED') throw e; lastErr = e; }
+      }
+      const err = new Error('첨부 파일을 텍스트로 옮기지 못했습니다' + (lastErr && lastErr.message ? ': ' + lastErr.message : ''));
+      err.code = (lastErr && lastErr.code) || '010';
+      throw err;
+    })();
+    // A failed transcription should be retried next time, not cached forever.
+    state.descCache[key].catch(()=>{ delete state.descCache[key]; });
+  }
+  return state.descCache[key];
+}
+function showDescInRound(desc){
+  const sec = document.getElementById('round-' + state.round);
+  if(!sec || document.getElementById('r' + state.round + '-desc')) return;
+  const el = document.createElement('details');
+  el.className = 'img-desc';
+  el.id = 'r' + state.round + '-desc';
+  el.innerHTML = '<summary>Gemini가 텍스트로 옮긴 첨부 파일 내용 (파일을 못 보는 노드용)</summary>' + mdLite(desc);
+  const head = sec.querySelector('.round-files') || sec.querySelector('.round-head');
+  head.insertAdjacentElement('afterend', el);
+  renderMathIn(el);
+}
+async function prepInput(slot, cfg, user, atts){
+  if(!atts || !atts.length || !canConvert()) return { user, atts };
+  const sp = splitAtts(cfg, atts);
+  if(!sp.convert.length) return { user, atts };
+  const desc = await describeFiles(sp.convert);
+  state.roundConverted[slot] = true;
+  return {
+    user: user + '\n\n[첨부 파일 내용 — 이 모델은 파일을 직접 볼 수 없어 Gemini가 텍스트로 옮긴 것입니다]\n' + desc,
+    atts: sp.direct
+  };
+}
+// One model call with conversion; an unexpected rejection while an image is
+// attached usually means "this model can't read images", so retry as text.
+async function callOn(slot, cfg, sys, user, temp, maxTok, requiredKeys, atts){
+  const inp = await prepInput(slot, cfg, user, atts);
+  try{
+    return await callAndParse(cfg.provider, keyFor(cfg.provider), cfg.model, sys, inp.user, temp, maxTok, requiredKeys, inp.atts);
+  }catch(err){
+    const imageSent = (inp.atts || []).some(f=>f.kind === 'image');
+    if(imageSent && canConvert() && ['004','008','010','011','012'].indexOf(err.code) !== -1){
+      state.noVision[cfg.provider + '|' + cfg.model] = true;
+      const inp2 = await prepInput(slot, cfg, user, atts);
+      return await callAndParse(cfg.provider, keyFor(cfg.provider), cfg.model, sys, inp2.user, temp, maxTok, requiredKeys, inp2.atts);
+    }
+    throw err;
+  }
+}
+
 async function preflightCheck(){
   syncCurrentKey();
   const atts = binaryFiles();
   const seen = {};
   const failures = [];
   for(const slot of SLOTS){
-    const cfg = nodeConfig(slot);
+    const cfg = runConfig(slot);
     // Only phase-1 nodes ever receive attachments (phase 2 and the final
     // call reason over text only), so testing 'supreme' with an image would
     // block on a failure it could never actually hit.
-    const slotAtts = slot === 'supreme' ? [] : atts;
+    let slotAtts = slot === 'supreme' ? [] : atts;
+    if(slotAtts.length && canConvert()) slotAtts = splitAtts(cfg, slotAtts).direct;
     const id = cfg.provider + '|' + cfg.model + (slotAtts.length ? '|att' : '');
     if(seen[id] === undefined){
       seen[id] = isCacheFresh(id)
@@ -3173,6 +3437,23 @@ async function preflightCheck(){
     }
     const r = seen[id];
     showAvail(diffModelToggle.checked ? availEl(slot) : availShared, r.code, cfg.model, id);
+    if(r.code !== '000' && slotAtts.some(f=>f.kind==='image') && canConvert()){
+      // Fails only with the image attached -> the model is image-blind; send it text instead.
+      const plainId = cfg.provider + '|' + cfg.model;
+      const r2 = isCacheFresh(plainId) ? state.probeCache[plainId]
+        : await probeModel(cfg.provider, sanitizeKey(state.keys[cfg.provider]||''), cfg.model, []);
+      r2.ts = r2.ts || Date.now();
+      state.probeCache[plainId] = r2;
+      if(r2.code === '000'){
+        state.noVision[plainId] = true;
+        showAvail(diffModelToggle.checked ? availEl(slot) : availShared, '000', cfg.model, plainId);
+        continue;
+      }
+    }
+    if(r.code !== '000' && failoverOn()){
+      setStatus('busy', SLOT_LABEL[slot] + ' 모델 사용 불가 — 대체 모델을 고르는 중...');
+      if(await preflightFailover(slot, id, r.code, slotAtts)) continue;
+    }
     if(r.code !== '000'){
       const info = ERROR_CODES[r.code] || ERROR_CODES['010'];
       const suffix = slotAtts.length ? ' — 첨부 파일과 함께 실패' : '';
@@ -3237,6 +3518,8 @@ async function handleSubmit(){
   // A file-only submission still needs some instruction text for the model.
   const effectiveQuestion = question || '첨부된 파일을 분석하고 이에 대해 판단하십시오.';
   buildRoundDOM(state.round, effectiveQuestion, fileNames);
+  state.roundConverted = {};
+  state.curQuestion = effectiveQuestion;
 
   // Text files and prior rounds are folded into the prompt itself.
   const fullQuestion = buildHistoryContext() + effectiveQuestion + filesAsText();
@@ -3650,6 +3933,7 @@ function init(){
   modelShared.addEventListener('change', ()=>{ renderSharedModelOptions(); renderAllNodeModelOptions(); });
   modelShared.addEventListener('input', ()=>{ scheduleCheck(null, 700); });
   solveToggle.addEventListener('change', ()=>{ refreshNodeRoles(); scheduleSave(); });
+  failoverToggle.addEventListener('change', ()=>{ scheduleSave(); refreshSubmitGate(); });
   SLOTS.forEach(slot=>{
     const mf = modelField(slot), pf = provField(slot);
     if(mf) mf.addEventListener('change', scheduleSave);
