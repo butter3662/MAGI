@@ -413,6 +413,12 @@
     color:var(--bg-void); background:var(--amber); padding:2px 7px; border-radius:2px; flex-shrink:0;
   }
   .round-head .rq{font-size:12px; color:var(--text-main); line-height:1.5; word-break:break-word; white-space:pre-wrap;}
+  .vqa-block{font-size:11.5px; border:1px solid var(--amber-dim); border-radius:2px; padding:8px 10px; margin:4px 0 14px;}
+  .vqa-block .vqa-ttl{color:var(--amber); font-size:10.5px; letter-spacing:1px; margin-bottom:6px;}
+  .vqa-item{margin:6px 0; line-height:1.55;}
+  .vqa-item .q{color:var(--text-dim);}
+  .vqa-item .a{color:var(--text-main);}
+  .vqa-item .unsure{color:var(--amber); font-size:10px; margin-left:4px;}
   .img-desc{font-size:11px; color:var(--text-dim); border:1px dashed var(--green-dim); border-radius:2px; padding:6px 8px; margin:0 0 10px;}
   .img-desc summary{cursor:pointer; color:var(--amber);}
   .round-files{font-size:9.5px; color:var(--text-dim); margin-bottom:8px;}
@@ -854,6 +860,10 @@
       <input type="checkbox" id="failoverToggle">
       <span><b>자동 대체</b> — 모델이 한도 초과·오류로 실패하면 Gemini Flash-Lite가 키를 입력해 둔 회사들의 모델 중 원래 모델과 성능이 가장 비슷한 모델을 골라 이어서 연산합니다. 대체 모델은 30분간 유지됩니다. 원래 모델이 무료면 무료 모델 중에서만 고릅니다. (Gemini 키가 없으면 모델 이름 기준으로 고릅니다)</span>
     </label>
+    <label class="strict-line">
+      <input type="checkbox" id="vqaToggle" checked>
+      <span><b>이미지 확인 질문 (Beta)</b> — 이미지를 직접 볼 수 없는 노드가 있을 때, 1차 연산 뒤 노드들이 "이미지에서 직접 확인해야 할 것"을 질문하고 Gemini가 원본 이미지를 다시 보고 답합니다. 그 답은 2차 비판과 최종 판정에 반영됩니다. (Gemini 키 필요, 호출 1회 추가)</span>
+    </label>
 
     <div class="adv-models" id="advModels">
       <div class="hint" style="margin:0 0 8px;">노드마다 다른 회사를 고를 수 있습니다. 고른 회사의 API 키는 위 탭에서 각각 입력해 두세요.</div>
@@ -908,7 +918,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v1.14.0</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v1.15.1</span></footer>
 </div>
 
 <script>
@@ -1031,6 +1041,7 @@ const modelFilter = $('modelFilter');
 const freeOnlyToggle = $('freeOnlyToggle');
 const solveToggle = $('solveToggle');
 const failoverToggle = $('failoverToggle');
+const vqaToggle = $('vqaToggle');
 const fetchModelsBtn = $('fetchModelsBtn');
 const modelListResult = $('modelListResult');
 const questionInput = $('questionInput');
@@ -1523,6 +1534,7 @@ function applySettingsToForm(obj){
   debugToggle.checked = !!obj.debug;
   solveToggle.checked = !!obj.solve;
   failoverToggle.checked = !!obj.failover;
+  vqaToggle.checked = obj.vqa === undefined ? true : !!obj.vqa;
   refreshNodeRoles();
   if(obj.freeOnly !== undefined) freeOnlyToggle.checked = !!obj.freeOnly;
   renderAllNodeModelOptions();
@@ -1543,6 +1555,7 @@ async function doSave(){
     debug: debugToggle.checked,
     solve: solveToggle.checked,
     failover: failoverToggle.checked,
+    vqa: vqaToggle.checked,
     freeOnly: freeOnlyToggle.checked
   };
   try{
@@ -2126,25 +2139,55 @@ function geminiParts(user, atts){
   return parts;
 }
 
-async function callGemini(apiKey, model, sys, user, temperature, maxTokens, atts){
+// Gemini 2.5+/3 think before answering by default, which is most of the wait.
+// helper = transcription/selection calls; those only need a light touch.
+function geminiThinkingConfig(model, helper){
+  const m = String(model || '').toLowerCase();
+  const vm = m.match(/gemini-(\d+(?:\.\d+)?)/);
+  const ver = vm ? parseFloat(vm[1]) : 0;
+  const lite = /lite/.test(m);
+  const deep = !helper && isSolve();
+  if(ver >= 3){
+    if(lite) return deep ? { thinkingLevel:'low' } : null;      // default is already minimal
+    return { thinkingLevel: deep ? 'medium' : 'low' };
+  }
+  if(ver >= 2.5){
+    if(lite) return null;                                         // off by default
+    if(/pro/.test(m)) return { thinkingBudget: deep ? 2048 : 512 };
+    return { thinkingBudget: deep ? 2048 : 0 };
+  }
+  return null;
+}
+async function callGemini(apiKey, model, sys, user, temperature, maxTokens, atts, opts){
   const headers = baseHeaders();
   headers['x-goog-api-key'] = apiKey;
 
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
             + encodeURIComponent(model) + ':generateContent';
-
-  const data = await httpJSON(url, {
+  const gen = {
+    temperature: temperature,
+    maxOutputTokens: maxTokens + 2000,
+    responseMimeType:'application/json'
+  };
+  const tc = geminiThinkingConfig(model, opts && opts.helper);
+  if(tc) gen.thinkingConfig = tc;
+  const send = ()=>httpJSON(url, {
     method:'POST', headers: headers,
     body: JSON.stringify({
       systemInstruction:{ parts:[{ text: sys }] },
       contents:[{ role:'user', parts: geminiParts(user, atts) }],
-      generationConfig:{
-        temperature: temperature,
-        maxOutputTokens: maxTokens + 2000,
-        responseMimeType:'application/json'
-      }
+      generationConfig: gen
     })
   }, 'Gemini');
+  let data;
+  try{ data = await send(); }
+  catch(e){
+    // A model that rejects this thinking setting still works with its default.
+    if(gen.thinkingConfig && (e.code === '008' || /thinking/i.test(e.message || ''))){
+      delete gen.thinkingConfig;
+      data = await send();
+    } else throw e;
+  }
 
   const cand = data && data.candidates && data.candidates[0];
   if(!cand){
@@ -2166,14 +2209,14 @@ async function callGemini(apiKey, model, sys, user, temperature, maxTokens, atts
 /* --- call + parse, with one retry --- */
 const RETRY_NOTE = '\n\n[재요청] 앞선 응답이 형식에 맞지 않았습니다. 지정된 JSON 객체 하나만 출력하십시오. 머리말, 설명, 코드블록, 안전 관련 메타데이터(safety 등)를 절대 포함하지 마십시오.';
 
-async function callAndParse(provider, apiKey, model, sys, user, temp, maxTok, requiredKeys, atts){
+async function callAndParse(provider, apiKey, model, sys, user, temp, maxTok, requiredKeys, atts, opts){
   let lastErr = null, lastRaw = '';
   for(let attempt=0; attempt<2; attempt++){
     const u = attempt===0 ? user : (user + RETRY_NOTE);
     // A failed parse is most often a truncated reply, so give it more room.
     const budget = attempt===0 ? maxTok : maxTok * 2;
     try{
-      const raw = await callModel(provider, apiKey, model, sys, u, temp, budget, atts);
+      const raw = await callModel(provider, apiKey, model, sys, u, temp, budget, atts, opts);
       // A real successful call is the strongest possible evidence this
       // provider+model works right now — stronger than a synthetic probe.
       // Stamping it here means an immediate follow-up question doesn't
@@ -2200,7 +2243,7 @@ async function callAndParse(provider, apiKey, model, sys, user, temp, maxTok, re
   throw lastErr || new Error('연산에 실패했습니다.');
 }
 /* --- dispatcher --- */
-async function callModel(provider, apiKey, model, sys, user, temperature, maxTokens, atts){
+async function callModel(provider, apiKey, model, sys, user, temperature, maxTokens, atts, opts){
   // Guard against a bad argument reaching the API: providers reject temp > 2.
   temperature = Number(temperature);
   if(!isFinite(temperature) || temperature < 0 || temperature > 2) temperature = 0.5;
@@ -2210,7 +2253,7 @@ async function callModel(provider, apiKey, model, sys, user, temperature, maxTok
   if(provider==='openrouter') text = await callOpenRouter(apiKey, model, sys, user, temperature, maxTokens, atts);
   else if(provider==='gpt')   text = await callOpenAI(apiKey, model, sys, user, temperature, maxTokens, atts);
   else if(provider==='claude')text = await callAnthropic(apiKey, model, sys, user, temperature, maxTokens, atts);
-  else if(provider==='gemini')text = await callGemini(apiKey, model, sys, user, temperature, maxTokens, atts);
+  else if(provider==='gemini')text = await callGemini(apiKey, model, sys, user, temperature, maxTokens, atts, opts);
   else throw new Error('알 수 없는 제공사입니다: ' + provider);
 
   if(!text || !text.trim()){
@@ -2482,9 +2525,17 @@ async function probeModel(provider, key, model, atts){
       url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
       // Gemini 2.5/3 models reserve tokens for hidden "thinking" by default,
       // which can silently consume a small budget before any visible text.
+      const pgen = { maxOutputTokens:2000 };
+      const ptc = geminiThinkingConfig(model, true);
+      if(ptc) pgen.thinkingConfig = ptc;
       opts = { method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key':key },
-        body: JSON.stringify({ contents:[{role:'user',parts:geminiParts(PING, atts)}],
-                               generationConfig:{ maxOutputTokens:2000 } }) };
+        body: JSON.stringify({ contents:[{role:'user',parts:geminiParts(PING, atts)}], generationConfig: pgen }) };
+      if(ptc){
+        const first = await fetch(url, opts);
+        if(first.status !== 400) return await readProbe(first);
+        delete pgen.thinkingConfig;
+        opts.body = JSON.stringify({ contents:[{role:'user',parts:geminiParts(PING, atts)}], generationConfig: pgen });
+      }
     } else {
       url = (provider === 'gpt')
         ? 'https://api.openai.com/v1/chat/completions'
@@ -2498,7 +2549,13 @@ async function probeModel(provider, key, model, atts){
                'Authorization':'Bearer ' + key }, body: JSON.stringify(body) };
     }
 
-    const res = await fetch(url, opts);
+    return await readProbe(await fetch(url, opts));
+  }catch(e){
+    return { code:'007' };
+  }
+}
+async function readProbe(res){
+  try{
     if(res.ok){
       // A 200 can still carry an error, or come back with no usable text.
       let data = null;
@@ -3086,7 +3143,9 @@ async function runPhase1(question, atts){
                         ['answer','conclusion','결론'], atts)
       .then(r=>{
         state.raw[k] = state.raw[k] || {}; state.raw[k].p1 = r.raw;
-        return normalizeNodeResult(r.parsed, r.raw);
+        const res = normalizeNodeResult(r.parsed, r.raw);
+        res.visualChecks = extractVisualChecks(r.parsed);
+        return res;
       });
   });
   const settled = await Promise.allSettled(tasks);
@@ -3122,7 +3181,7 @@ async function runPhase2(question, phase1Results){
     const others = NODE_ORDER.filter(x=>x!==k).map(x=>({ node:NODES[x], data:phase1Results[x] }));
     const prompt = buildPhase2Prompt(question, node, own, others);
     // Phase 2 reasons over Phase 1 text, so attachments are not resent.
-    return callSlot(k, 'p2', sysFor(k, 2), prompt,
+    return callSlot(k, 'p2', sysFor(k, 2), prompt + (state.roundVQA || ''),
                         tempFor(k), 2600, ['answer','conclusion','결론'])
       .then(r=>{
         state.raw[k] = state.raw[k] || {}; state.raw[k].p2 = r.raw;
@@ -3162,7 +3221,7 @@ async function runPhase2(question, phase1Results){
 async function runFinal(question, phase2Results){
   const prompt = buildFinalPrompt(question, phase2Results);
   const r = await callSlot('supreme', null, sysForSupreme(),
-                               prompt, 0.4, 1800, ['final_answer','finalAnswer','verdict','판정']);
+                               prompt + (state.roundVQA || ''), 0.4, 1800, ['final_answer','finalAnswer','verdict','판정']);
   state.raw.supreme = r.raw;
   return normalizeFinalResult(r.parsed, r.raw);
 }
@@ -3290,7 +3349,7 @@ async function pickReplacement(base, code, atts, tried){
       (atts && atts.length && !canConvert() ? '[조건] 이미지·파일 입력을 지원하는 모델만 고르십시오.\n' : '') +
       '\n[후보 목록 — provider|model]\n' + cands.map(c=>c.provider + '|' + c.model).join('\n');
     try{
-      const r = await callAndParse('gemini', gkey, selectorModel(), SELECTOR_SYS, user, 0, 1500, ['model']);
+      const r = await callAndParse('gemini', gkey, selectorModel(), SELECTOR_SYS, user, 0, 1500, ['model'], null, { helper:true });
       const o = r.parsed || {};
       let pm = String(pick(o, ['model']) || '').trim();
       let pp = String(pick(o, ['provider']) || '').trim().toLowerCase();
@@ -3393,21 +3452,28 @@ function describerModel(){
   return ids[0] || selectorModel();
 }
 const DESCRIBE_SYS = '당신은 첨부 파일 판독기입니다. 다른 AI는 이 파일을 볼 수 없고 당신이 쓴 설명만 읽습니다. 사용자의 질문에 답하는 데 필요한 정보가 하나도 빠지지 않도록 옮기십시오. 요약하지 마십시오.\n\n[1단계 — 유형 판단]\n첫 줄에 \"[유형] ...\"으로 파일의 종류를 적으십시오. 예: 시험 문제, 교과서·문서, 표, 그래프·차트, 도식·구조도·회로, 손글씨 필기, 화면 캡처, 사진, 기타. 여러 종류가 섞여 있으면 모두 적으십시오.\n\n[2단계 — 공통 원칙]\n- 보이는 글자는 철자·숫자·기호·단위를 바꾸지 말고 그대로 옮기십시오. 수식은 $...$ 로 감싼 LaTeX로 쓰십시오.\n- 배치가 의미를 가지면 배치도 설명하십시오. 무엇이 무엇의 위·옆·안에 있는지, 화살표나 선이 무엇에서 무엇으로 이어지는지 쓰십시오.\n- 형식에 맞추느라 정보를 버리지 마십시오. 정리하기 어려운 내용은 문장으로 자세히 쓰십시오.\n- 확신이 없는 부분은 추측하지 말고 [불확실: 이유] 로 표시하십시오.\n- 값, 순서, 시점처럼 그림에서 직접 읽어낼 수 있는 사실은 정확히 읽어 적으십시오. 그러나 그 사실을 이용해 문제의 답을 추론하거나 평가하지는 마십시오.\n\n[3단계 — 유형별 요령: 해당하는 것만 적용]\n- 표: 먼저 행 수와 열 수, 머리글(여러 줄 머리글이면 계층까지)을 쓰십시오. 그다음 마크다운 표나 HTML 대신 한 행을 한 줄로, \"행 머리글 | 열 이름=값, 열 이름=값\" 형태로 쓰십시오. 단위, 병합된 칸, 빈칸, 기호(ⓐ, ㉠ 등)는 그대로 표시하십시오. 다 쓴 뒤 행·열 개수와 각 칸의 위치가 원본과 맞는지 확인하십시오.\n- 그래프·차트: 아래 순서를 지키십시오.\n  1) 축: 이름, 단위, 표시된 눈금 값, 기준선(점선 등)이 그어진 위치.\n  2) 라벨 대응: 계열(곡선·막대·점)마다 어떤 라벨인지와 그 근거(범례 색·모양, 지시선의 끝이 닿는 지점, 곡선 끝에 붙은 글자). 지시선은 글자에서 시작해 끝점이 실제로 닿는 계열까지 따라가서 판단하십시오.\n  3) 값 읽기: 가로축에 표시된 눈금이나 기준선 위치마다 각 계열의 값을 \"x=○○: A=값, B=값\" 형태로 정리하십시오. 눈금 사이 값은 \"약\"을 붙이십시오.\n  4) 모양: 계열마다 증가·감소·꺾임·평탄 구간과 그 구간이 시작되는 위치, 최댓값·최솟값과 그 위치.\n  5) 비교: 기준 위치마다 계열 간 크기 순서, 어느 계열이 더 가파른지, 계열이 만나거나 갈라지는 위치.\n  6) 점검: 2)의 라벨 대응이 3)~5)의 내용과 모순되지 않는지 이미지와 다시 대조하십시오.\n- 도식·구조도·회로: 구성 요소를 모두 나열한 뒤 연결 관계와 라벨을 쓰십시오.\n- 사진: 장면, 주요 대상과 그 속성(색, 크기, 개수, 상태), 위치 관계, 사진 속 글자를 쓰십시오.\n- 화면 캡처: 질문과 관련된 내용 영역을 옮기십시오. 기기 상태 표시줄, 앱 탭, 가장자리에 잘린 무관한 내용은 질문이 그것에 관한 것이 아니면 생략하십시오.\n- 손글씨: 손글씨가 파일의 본문이면(필기 노트 등) 본문으로 옮기십시오. 인쇄물 위에 나중에 덧붙인 표시(메모, 체크, 동그라미, 밑줄, 덧쓴 숫자)는 본문과 섞지 말고 맨 끝 [덧붙인 표시] 아래에 위치와 함께 따로 모으십시오.\n\n한국어로 쓰십시오.\n반드시 아래 JSON으로만 답하십시오.\n{\"description\": \"파일 내용 전체\"}';
-const VERIFY_SYS = '당신은 판독 검수자입니다. 아래 [판독 결과]는 다른 판독기가 첨부 이미지를 텍스트로 옮긴 것입니다. 이미지와 한 항목씩 대조해 틀린 값, 뒤바뀐 라벨, 잘못된 위치, 빠진 정보를 찾아 고치십시오.\n- 특히 그래프의 라벨과 계열의 대응, 기준 위치마다의 값과 크기 순서, 표의 행·열 위치와 각 칸의 값을 확인하십시오.\n- 원래 판독 결과의 형식과 다른 정보는 그대로 두고, 틀린 곳만 고치십시오.\n- 문제를 풀거나 해석하지 마십시오.\n- 한국어로 쓰십시오.\n반드시 아래 JSON으로만 답하십시오.\n{\"description\": \"고친 판독 결과 전체\", \"corrections\": \"고친 점을 한두 문장으로, 없으면 빈 문자열\"}';
+const VERIFY_SYS = '당신은 판독 검수자입니다. 아래 [판독 결과]는 다른 판독기가 첨부 이미지를 텍스트로 옮긴 것입니다. 이미지와 한 항목씩 대조해 틀린 값, 뒤바뀐 라벨, 잘못된 위치, 빠진 정보를 찾으십시오.\n- 특히 그래프의 라벨과 계열의 대응, 기준 위치마다의 값과 크기 순서, 표의 행·열 위치와 각 칸의 값을 확인하십시오.\n- 판독 결과 전체를 다시 쓰지 말고, 고칠 부분만 \"원래 내용 → 고친 내용\" 형식으로 적으십시오. 고칠 것이 없으면 빈 배열로 두십시오.\n- 문제를 풀거나 해석하지 마십시오.\n- 한국어로 쓰십시오.\n반드시 아래 JSON으로만 답하십시오.\n{\"corrections\": [\"원래 내용 → 고친 내용\"]}';
 function needsVerify(desc){
   const first = String(desc || '').split('\n').slice(0, 2).join(' ');
   return /표|그래프|차트|도식|구조도|회로/.test(first);
 }
 async function verifyDescription(files, desc){
   try{
-    const user = '[판독 결과]\n' + desc;
-    const r = await callAndParse('gemini', keyFor('gemini'), describerModel(), VERIFY_SYS, user, 0.1, 4500, ['description'], files);
-    const d = r.parsed ? String(pick(r.parsed, ['description']) || '') : '';
-    const c = r.parsed ? String(pick(r.parsed, ['corrections','수정']) || '').trim() : '';
-    if(d.trim().length > desc.length * 0.6) return { desc: d, corrections: c };
+    const r = await callAndParse('gemini', keyFor('gemini'), describerModel(), VERIFY_SYS, '[판독 결과]\n' + desc,
+                                 0.1, 1200, ['corrections'], files, { helper:true });
+    let list = r.parsed ? pick(r.parsed, ['corrections','수정']) : null;
+    if(typeof list === 'string') list = list.trim() ? [list] : [];
+    list = (Array.isArray(list) ? list : []).map(x=>String(x || '').trim()).filter(Boolean);
+    if(list.length){
+      return {
+        desc: desc + '\n\n[검수 정정 — 위 판독과 다르면 이 정정이 우선합니다]\n' + list.map(x=>'- ' + x).join('\n'),
+        corrections: list.join(' / ')
+      };
+    }
   }catch(e){ if(e.code === 'CANCELLED') throw e; }
   return { desc: desc, corrections: '' };   // checking is a bonus; keep the first reading on failure
 }
+
 function describeFiles(files){
   const key = files.map(f=>f.name + ':' + String(f.data || '').length).join('|');
   if(!state.descCache[key]){
@@ -3416,7 +3482,7 @@ function describeFiles(files){
       let lastErr = null;
       for(const m of [describerModel(), selectorModel()]){
         try{
-          const r = await callAndParse('gemini', keyFor('gemini'), m, DESCRIBE_SYS, user, 0.1, 4000, ['description'], files);
+          const r = await callAndParse('gemini', keyFor('gemini'), m, DESCRIBE_SYS, user, 0.1, 4000, ['description'], files, { helper:true });
           const d = r.parsed ? String(pick(r.parsed, ['description','내용']) || '') : grabField(r.raw, ['description']);
           if(d.trim()){
             if(needsVerify(d)){
@@ -3457,7 +3523,7 @@ async function prepInput(slot, cfg, user, atts){
   const desc = await describeFiles(sp.convert);
   state.roundConverted[slot] = true;
   return {
-    user: user + '\n\n[첨부 파일 내용 — 이 모델은 파일을 직접 볼 수 없어 Gemini가 텍스트로 옮긴 것입니다. [덧붙인 표시]는 사용자가 원본 위에 적은 메모입니다. 질문이 그 메모에 관한 것(예: 내 풀이 확인)이 아니라면 정답의 근거로 삼지 마십시오. [불확실]로 표시된 부분은 단정하지 마십시오.]\n' + desc,
+    user: user + (vqaOn() ? VQA_ASK : '') + '\n\n[첨부 파일 내용 — 이 모델은 파일을 직접 볼 수 없어 Gemini가 텍스트로 옮긴 것입니다. [덧붙인 표시]는 사용자가 원본 위에 적은 메모입니다. 질문이 그 메모에 관한 것(예: 내 풀이 확인)이 아니라면 정답의 근거로 삼지 마십시오. [불확실]로 표시된 부분은 단정하지 마십시오.]\n' + desc,
     atts: sp.direct
   };
 }
@@ -3507,11 +3573,104 @@ async function callOn(slot, cfg, sys, user, temp, maxTok, requiredKeys, atts){
   }
 }
 
+/* ---------------------------------------------------------------------
+   Image check questions (Beta): text-only nodes ask what they need to see,
+   and a vision model answers by looking at the original image again.
+--------------------------------------------------------------------- */
+function vqaOn(){ return !!(vqaToggle && vqaToggle.checked) && canConvert(); }
+const VQA_ASK = '\n\n[추가 출력 — visual_checks] 당신은 첨부 이미지를 직접 볼 수 없고 아래 판독 설명만 받습니다. 판독 설명이 모호하거나 틀렸을 경우 결론이 바뀔 수 있는 지점을, 원본 이미지를 보면 바로 답할 수 있는 구체적인 질문으로 최대 3개 만들어 JSON의 "visual_checks" 필드(문자열 배열)에 넣으십시오. 예: "t₁에서 A 곡선은 이미 평탄한가?", "표의 Ⅲ열 ㉡ 칸 값은 무엇인가?" 결론을 좌우하지 않는 질문은 넣지 말고, 필요 없으면 빈 배열로 두십시오.';
+function extractVisualChecks(parsed){
+  const v = pick(parsed, ['visual_checks','visualChecks','확인질문']);
+  const arr = Array.isArray(v) ? v : (typeof v === 'string' && v.trim() ? v.split(/\n+/) : []);
+  return arr.map(x=>String(x || '').replace(/^\s*[-\d.)]+\s*/, '').trim()).filter(x=>x.length > 3).slice(0, 3);
+}
+const VQA_SYS = '당신은 이미지 확인 담당입니다. 다른 AI들이 이 이미지를 직접 보지 못한 채 문제를 풀다가, 이미지에서 확인해야 할 질문을 보냈습니다. 각 질문에 원본 이미지를 직접 보고 답하십시오.\n- 다른 설명에 기대지 말고 이미지만 근거로 답하십시오.\n- 답과 함께 이미지의 어느 부분을 보고 판단했는지(근거)를 짧게 쓰십시오.\n- 그래프는 라벨에서 뻗은 지시선의 끝점, 점선과 곡선이 만나는 위치를 따라가 확인하십시오. 표는 행과 열을 다시 세어 칸의 위치를 확인하십시오.\n- 이미지로 확인할 수 없거나 확신이 없으면 sure를 false로 두고 그 이유를 쓰십시오.\n- 문제의 정답을 추론하지 말고, 질문에만 답하십시오.\n- 한국어로 쓰십시오.\n반드시 아래 JSON으로만 답하십시오.\n{"answers": [{"q": "질문 그대로", "a": "답", "basis": "근거", "sure": true}]}';
+function dedupeQuestions(list){
+  const out = [], seen = [];
+  list.forEach(q=>{
+    const norm = q.replace(/[₀-₉]/g, c=>String(c.charCodeAt(0) - 0x2080)).replace(/[\s?.!,$_{}\\]/g, '').toLowerCase();
+    if(seen.some(x=>x === norm || (norm.length > 8 && (x.indexOf(norm) !== -1 || norm.indexOf(x) !== -1)))) return;
+    seen.push(norm); out.push(q);
+  });
+  return out.slice(0, 6);
+}
+function renderVQA(items, failedMsg){
+  const p1 = document.getElementById('r' + state.round + '-p1');
+  if(!p1) return;
+  const host = p1.closest('.phase-block') || p1;
+  let el = document.getElementById('r' + state.round + '-vqa');
+  if(!el){
+    el = document.createElement('div');
+    el.className = 'vqa-block';
+    el.id = 'r' + state.round + '-vqa';
+    host.insertAdjacentElement('afterend', el);
+  }
+  let html = '<div class="vqa-ttl">이미지 확인 질문 (Beta) — Gemini가 원본 이미지를 다시 보고 답함</div>';
+  if(failedMsg) html += '<div class="vqa-item"><span class="unsure">' + escapeHtml(failedMsg) + '</span></div>';
+  (items || []).forEach(it=>{
+    html += '<div class="vqa-item"><div class="q">Q. ' + mdInline(it.q) + '</div>' +
+      '<div class="a">A. ' + mdInline(it.a) + (it.sure ? '' : '<span class="unsure">[불확실]</span>') + '</div>' +
+      (it.basis ? '<div class="q" style="font-size:10px;">근거: ' + mdInline(it.basis) + '</div>' : '') + '</div>';
+  });
+  el.innerHTML = html;
+  renderMathIn(el);
+}
+async function runVisualChecks(p1results, atts){
+  state.roundVQA = '';
+  if(!vqaOn() || !atts || !atts.length) return;
+  if(!NODE_ORDER.some(k=>state.roundConverted[k])) return;   // every node saw the image itself
+  const asked = [];
+  NODE_ORDER.forEach(k=>{
+    const r = p1results[k];
+    if(r && !r.error && Array.isArray(r.visualChecks)) r.visualChecks.forEach(q=>asked.push(q));
+  });
+  const qs = dedupeQuestions(asked);
+  if(!qs.length) return;
+  setStatus('busy', '이미지 확인 질문 — Gemini가 원본 이미지를 다시 보고 답합니다');
+  const user = '[문제/질문]\n' + (state.curQuestion || '') + '\n\n[확인 질문]\n' + qs.map((q,i)=>(i+1) + '. ' + q).join('\n');
+  let items = null, lastErr = null;
+  for(const m of [describerModel(), selectorModel()]){
+    try{
+      const r = await callAndParse('gemini', keyFor('gemini'), m, VQA_SYS, user, 0.1, 2500, ['answers'], atts, { helper:true });
+      const arr = r.parsed ? pick(r.parsed, ['answers','답변']) : null;
+      if(Array.isArray(arr) && arr.length){
+        items = arr.map((x,i)=>({
+          q: String((x && (x.q || x.question)) || qs[i] || ''),
+          a: String((x && (x.a || x.answer)) || ''),
+          basis: String((x && (x.basis || x.evidence)) || ''),
+          sure: !(x && (x.sure === false || x.sure === 'false'))
+        })).filter(x=>x.a);
+        if(items.length) break;
+      }
+    }catch(e){ if(e.code === 'CANCELLED') throw e; lastErr = e; }
+  }
+  if(!items || !items.length){
+    renderVQA([], '확인 질문에 답을 받지 못했습니다' + (lastErr && lastErr.message ? ': ' + lastErr.message : '') + ' — 기존 판독만으로 진행합니다.');
+    return;
+  }
+  renderVQA(items, '');
+  state.roundVQA = '\n\n[이미지 직접 확인 결과 — 1차 연산 뒤 노드들이 보낸 질문에 Gemini가 원본 이미지를 다시 보고 답한 것입니다. 앞선 판독 설명과 다르면 이 결과를 우선하십시오. [불확실] 표시가 있는 답은 단정하지 마십시오.]\n' +
+    items.map((it,i)=>(i+1) + '. Q: ' + it.q + '\n   A: ' + it.a + (it.sure ? '' : ' [불확실]') + (it.basis ? '\n   근거: ' + it.basis : '')).join('\n');
+}
+
 async function preflightCheck(){
   syncCurrentKey();
   const atts = binaryFiles();
   const seen = {};
   const failures = [];
+  // Warm the cache in parallel; the loop below then reads the results.
+  const jobs = {};
+  for(const slot of SLOTS){
+    const cfg = runConfig(slot);
+    let sa = slot === 'supreme' ? [] : atts;
+    if(sa.length && canConvert()) sa = splitAtts(cfg, sa).direct;
+    const id = cfg.provider + '|' + cfg.model + (sa.length ? '|att' : '');
+    if(!jobs[id] && !isCacheFresh(id)){
+      jobs[id] = probeModel(cfg.provider, sanitizeKey(state.keys[cfg.provider]||''), cfg.model, sa)
+        .then(r=>{ r.ts = Date.now(); state.probeCache[id] = r; });
+    }
+  }
+  await Promise.all(Object.values(jobs));
   for(const slot of SLOTS){
     const cfg = runConfig(slot);
     // Only phase-1 nodes ever receive attachments (phase 2 and the final
@@ -3611,6 +3770,7 @@ async function handleSubmit(){
   const effectiveQuestion = question || '첨부된 파일을 분석하고 이에 대해 판단하십시오.';
   buildRoundDOM(state.round, effectiveQuestion, fileNames);
   state.roundConverted = {};
+  state.roundVQA = '';
   state.curQuestion = effectiveQuestion;
   if(atts.length && canConvert()){
     const seenSets = {};
@@ -3634,6 +3794,7 @@ async function handleSubmit(){
     setStatus('busy', 'PHASE 1 — 세 노드가 독립적으로 연산합니다 (' + pLabel + ')');
     const p1 = await runPhase1(fullQuestion, atts);
     if(p1.allFailed) throw new Error('세 노드 모두 1차 연산에 실패했습니다. 위 카드의 오류 내용을 확인하세요.');
+    await runVisualChecks(p1.results, atts);
 
     setStatus('busy', 'PHASE 2 — 서로의 답변을 비판하며 재연산합니다 (' + pLabel + ')');
     const p2 = await runPhase2(fullQuestion, p1.results);
@@ -4034,6 +4195,7 @@ function init(){
   modelShared.addEventListener('input', ()=>{ scheduleCheck(null, 700); });
   solveToggle.addEventListener('change', ()=>{ refreshNodeRoles(); scheduleSave(); });
   failoverToggle.addEventListener('change', ()=>{ scheduleSave(); refreshSubmitGate(); });
+  vqaToggle.addEventListener('change', scheduleSave);
   SLOTS.forEach(slot=>{
     const mf = modelField(slot), pf = provField(slot);
     if(mf) mf.addEventListener('change', scheduleSave);
