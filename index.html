@@ -297,6 +297,19 @@
   }
   .nodefilter:focus{border-color:var(--green-core);}
   .cfg-row input{flex:1; min-width:0;}
+  .model-drop{border:1px solid var(--green-core); background:#020a06; max-height:320px; overflow-y:auto;
+    margin-top:4px; border-radius:2px; -webkit-overflow-scrolling:touch;}
+  .model-drop[hidden]{display:none;}
+  .md-item{display:flex; justify-content:space-between; gap:8px; padding:10px; cursor:pointer;
+    font-family:var(--font-mono); font-size:12px; color:var(--text-main); border-bottom:1px solid #0b2016;}
+  .md-item:last-child{border-bottom:none;}
+  .md-item.on{color:var(--green-core); background:#03140c;}
+  .md-item .fr{color:var(--amber); font-size:10px; flex-shrink:0;}
+  .md-item.custom{color:var(--text-dim);}
+  .md-empty{padding:10px; color:var(--text-dim); font-size:11px;}
+  .model-current{margin-top:6px; padding:4px 2px; font-size:11.5px; color:var(--text-dim); pointer-events:none; word-break:break-all;}
+  .model-current b{color:var(--green-core); font-weight:400;}
+  .model-current .fr{color:var(--amber); font-size:10px; margin-left:6px;}
   .nodesel{
     background:#020a06; border:1px solid var(--green-dim); color:var(--text-main);
     font-family:var(--font-mono); font-size:12px; padding:9px 6px; border-radius:2px; outline:none;
@@ -842,11 +855,13 @@
       <button class="iconbtn" id="fetchModelsBtn">목록</button>
       <button class="iconbtn" id="checkModelsBtn">전체확인</button>
     </div>
+    <div class="model-drop" id="modelDrop" hidden></div>
     <label class="strict-line" style="margin-top:6px;">
       <input type="checkbox" id="freeOnlyToggle" checked>
       <span>무료 모델만 보기</span>
     </label>
-    <select id="modelSelect" class="nodesel" style="width:100%;margin-top:6px;"></select>
+    <select id="modelSelect" hidden></select>
+    <div class="model-current" id="modelCurrent"></div>
     <input type="text" id="modelShared" placeholder="모델 ID 직접 입력" hidden>
     <div class="avail" id="availShared"></div>
     <div class="key-check-result" id="modelListResult"></div>
@@ -918,7 +933,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v1.15.5</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.0.0</span></footer>
 </div>
 
 <script>
@@ -1038,6 +1053,7 @@ const codeRef = $('codeRef');
 const codeList = $('codeList');
 const codeDetail = $('codeDetail');
 const modelFilter = $('modelFilter');
+const modelDrop = $('modelDrop'), modelCurrent = $('modelCurrent');
 const freeOnlyToggle = $('freeOnlyToggle');
 const solveToggle = $('solveToggle');
 const failoverToggle = $('failoverToggle');
@@ -1810,24 +1826,50 @@ function renderSharedModelOptions(){
   const all = modelsFor(state.provider);
   const cur = modelShared.value.trim();
   const shown = applyFilter(all);
-  if(!shown.length){
-    modelSelect.innerHTML = '<option value="">' + PROVIDERS[state.provider].label +
-      '에 검색 결과 없음</option><option value="'+CUSTOM+'">직접 입력...</option>';
-    clearAvail(availShared);          // the code belonged to a model not on show
-    return;
-  }
-  modelSelect.innerHTML = optionList(shown, cur) +
-    '<option value="'+CUSTOM+'">직접 입력...</option>';
-  const switched = cur && shown.indexOf(cur) === -1;
-  modelSelect.value = switched ? shown[0] : cur;
-  if(modelSelect.value && modelSelect.value !== CUSTOM) modelShared.value = modelSelect.value;
-  const total = all.length;
+  // The hidden select only mirrors state; keep the current pick in it even when filtered out.
+  let ids = shown.slice();
+  if(cur && ids.indexOf(cur) === -1) ids = [cur].concat(ids);
+  modelSelect.innerHTML = optionList(ids, cur) + '<option value="'+CUSTOM+'">직접 입력...</option>';
+  modelSelect.value = cur || ids[0] || '';
+  const picked = !cur && modelSelect.value && modelSelect.value !== CUSTOM;
+  if(picked) modelShared.value = modelSelect.value;
   if(modelListResult && (modelFilter.value.trim() || freeOnlyToggle.checked)){
-    modelListResult.textContent = shown.length + ' / ' + total + '개 표시 중';
+    modelListResult.textContent = shown.length + ' / ' + all.length + '개 표시 중';
     modelListResult.style.color = 'var(--text-dim)';
   }
-  if(switched) scheduleCheck(null, 0);   // the model actually changed, not just its list position
+  updateModelCurrent();
+  if(!modelDrop.hidden) renderModelDrop();
+  if(picked) scheduleCheck(null, 0);
   else syncAvail(null);
+}
+function updateModelCurrent(){
+  const id = modelShared.value.trim() || PROVIDERS[state.provider].defaultModel;
+  modelCurrent.innerHTML = '선택된 모델: <b>' + escapeHtml(id) + '</b>' + (isFreeModel(id) ? '<span class="fr">무료</span>' : '');
+}
+const MODEL_DROP_MAX = 300;
+function renderModelDrop(){
+  const shown = applyFilter(modelsFor(state.provider));
+  const cur = modelShared.value.trim();
+  let html = shown.length ? '' : '<div class="md-empty">' + PROVIDERS[state.provider].label + '에 검색 결과가 없습니다.</div>';
+  shown.slice(0, MODEL_DROP_MAX).forEach(id=>{
+    html += '<div class="md-item' + (id === cur ? ' on' : '') + '" data-id="' + escapeHtml(id) + '"><span>' + escapeHtml(id) + '</span>' +
+      (isFreeModel(id) ? '<span class="fr">무료</span>' : '') + '</div>';
+  });
+  if(shown.length > MODEL_DROP_MAX) html += '<div class="md-empty">' + (shown.length - MODEL_DROP_MAX) + '개 더 있음 — 검색어로 좁혀 보세요.</div>';
+  html += '<div class="md-item custom" data-id="' + CUSTOM + '"><span>직접 입력...</span></div>';
+  modelDrop.innerHTML = html;
+}
+function openModelDrop(){ renderModelDrop(); modelDrop.hidden = false; }
+function closeModelDrop(){ modelDrop.hidden = true; }
+function pickSharedModel(id){
+  if(id !== CUSTOM && !Array.from(modelSelect.options).some(o=>o.value === id)){
+    modelSelect.insertAdjacentHTML('afterbegin', '<option value="' + escapeHtml(id) + '">' + escapeHtml(id) + '</option>');
+  }
+  modelSelect.value = id;
+  modelSelect.dispatchEvent(new Event('change'));
+  closeModelDrop();
+  modelFilter.blur();
+  updateModelCurrent();
 }
 function renderNodeModelOptions(slot){
   const sel = modelField(slot);
@@ -4185,7 +4227,7 @@ function init(){
     toggleKeyVis.textContent = isPw ? '숨기기' : '표시';
   });
   verifyKeyBtn.addEventListener('click', verifyApiKey);
-  fetchModelsBtn.addEventListener('click', loadModelList);
+  fetchModelsBtn.addEventListener('click', async ()=>{ await loadModelList(); openModelDrop(); });
   checkModelsBtn.addEventListener('click', checkAllModels);
   codeRefToggle.addEventListener('click', ()=>{
     const on = codeRef.classList.toggle('show');
@@ -4218,8 +4260,21 @@ function init(){
   });
   modelShared.addEventListener('input', ()=>{ scheduleSave(); refreshNodeKeyStatus(); });
   modelFilter.addEventListener('input', ()=>{
+    modelDrop.hidden = false;
     renderSharedModelOptions();
     renderAllNodeModelOptions();
+  });
+  modelFilter.addEventListener('focus', openModelDrop);
+  modelFilter.addEventListener('click', openModelDrop);
+  modelDrop.addEventListener('click', (e)=>{
+    const it = e.target.closest('.md-item');
+    if(it) pickSharedModel(it.getAttribute('data-id'));
+  });
+  // Tapping anywhere outside the search row and its list closes the list.
+  document.addEventListener('pointerdown', (e)=>{
+    if(modelDrop.hidden) return;
+    if(modelDrop.contains(e.target) || e.target === modelFilter || e.target === fetchModelsBtn) return;
+    closeModelDrop();
   });
   freeOnlyToggle.addEventListener('change', ()=>{
     renderSharedModelOptions();
@@ -4241,7 +4296,7 @@ function init(){
     if(modelSelect.value !== CUSTOM) scheduleCheck(null, 0);
   });
   modelShared.addEventListener('change', ()=>{ renderSharedModelOptions(); renderAllNodeModelOptions(); });
-  modelShared.addEventListener('input', ()=>{ scheduleCheck(null, 700); });
+  modelShared.addEventListener('input', ()=>{ scheduleCheck(null, 700); updateModelCurrent(); });
   solveToggle.addEventListener('change', ()=>{ refreshNodeRoles(); scheduleSave(); });
   failoverToggle.addEventListener('change', ()=>{ scheduleSave(); refreshSubmitGate(); });
   vqaToggle.addEventListener('change', scheduleSave);
