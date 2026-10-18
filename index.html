@@ -918,7 +918,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v1.15.3</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v1.15.5</span></footer>
 </div>
 
 <script>
@@ -2915,7 +2915,7 @@ function cardHead(node, right, rightCls, slotKey){
         ' 사용 불가 → ' + escapeHtml(PROVIDERS[c.provider].label + ' ' + c.model) + ' 로 자동 대체</div>';
     }
   }
-  if(slotKey && state.roundConverted[slotKey]){
+  if(slotKey && state.roundConverted[slotKey] && !state.roundAllConverted){
     foNote += '<div class="fo-note">이 모델은 첨부 파일을 직접 볼 수 없어 Gemini가 텍스트로 옮긴 내용을 바탕으로 답했습니다</div>';
   }
   return '<div class="card-head">' +
@@ -3418,7 +3418,7 @@ function renderSwitchingCard(key, phase){
 // During the run: a call failed mid-deliberation, pick a replacement and retry.
 async function callSlot(slot, phase, sys, user, temp, maxTok, requiredKeys, atts){
   const cfg = runConfig(slot);
-  const budget = { deadline: null };
+  const budget = { deadline: null, reserve: failoverOn() ? 100000 : 0 };
   try{
     return await callOn(slot, cfg, sys, user, temp, maxTok, requiredKeys, atts, budget);
   }catch(err){
@@ -3427,6 +3427,8 @@ async function callSlot(slot, phase, sys, user, temp, maxTok, requiredKeys, atts
     const tried = [base.provider + '|' + base.model, cfg.provider + '|' + cfg.model];
     let lastErr = err, found = false, lastPick = null;
     renderSwitchingCard(slot, phase);
+    // Release the time held back for exactly this moment.
+    if(budget.reserve){ budget.deadline = (budget.deadline || Date.now()) + budget.reserve; budget.reserve = 0; }
     // A slow model's replacement gets one shot, and only if there is time for it.
     const tries = err.code === '013' ? 1 : 2;
     for(let i=0; i<tries; i++){
@@ -3592,7 +3594,8 @@ async function callChecked(cfg, sys, user, temp, maxTok, requiredKeys, atts, opt
 async function callOn(slot, cfg, sys, user, temp, maxTok, requiredKeys, atts, opts){
   const inp = await prepInput(slot, cfg, user, atts);
   // The clock starts once the transcription is ready, so waiting for it is free.
-  if(opts && !opts.deadline) opts.deadline = Date.now() + nodeBudgetMs();
+  // Part of the budget is held back so a failover still has time to run.
+  if(opts && !opts.deadline) opts.deadline = Date.now() + nodeBudgetMs() - (opts.reserve || 0);
   try{
     return await callChecked(cfg, sys, inp.user, temp, maxTok, requiredKeys, inp.atts, opts);
   }catch(err){
@@ -3804,6 +3807,19 @@ async function handleSubmit(){
   buildRoundDOM(state.round, effectiveQuestion, fileNames);
   state.roundConverted = {};
   state.roundVQA = '';
+  // When no node can read the attachment, say so once for the round instead of on every card.
+  state.roundAllConverted = !!(atts.length && canConvert() &&
+    NODE_ORDER.every(k=>splitAtts(runConfig(k), atts).convert.length > 0));
+  if(state.roundAllConverted){
+    const sec = document.getElementById('round-' + state.round);
+    const firstPhase = sec && sec.querySelector('.phase-block');
+    if(firstPhase){
+      const note = document.createElement('div');
+      note.className = 'fo-note';
+      note.textContent = '세 노드 모두 첨부 파일을 직접 볼 수 없는 모델이라, Gemini가 텍스트로 옮긴 내용을 바탕으로 답합니다.';
+      firstPhase.insertAdjacentElement('beforebegin', note);
+    }
+  }
   state.curQuestion = effectiveQuestion;
   if(atts.length && canConvert()){
     const seenSets = {};
