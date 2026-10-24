@@ -933,7 +933,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.0.1</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.0.2</span></footer>
 </div>
 
 <script>
@@ -3315,6 +3315,7 @@ function updateInputMode(){
 
 function resetSession(){
   state.sessionId = null;
+  state.convOwner = null;
   state.title = null;
   state.history = [];
   state.round = 0;
@@ -3327,6 +3328,22 @@ function resetSession(){
   clearError();
   updateInputMode();
   setStatus('', '대기 중 — 새 심의를 시작합니다');
+}
+
+// Clear everything the previous account could see: conversation, cached image
+// transcriptions, failover picks. Stops a running deliberation first.
+async function wipeForAccountChange(){
+  if(state.busy){
+    stopSubmission();
+    const t0 = Date.now();
+    while(state.busy && Date.now() - t0 < 15000) await new Promise(r=>setTimeout(r, 100));
+  }
+  resetSession();
+  state.descCache = {};
+  state.failover = {};
+  state.noVision = {};
+  sessionList.innerHTML = '';
+  closeDrawer();
 }
 
 const PROBE_TTL_MS = 90000;
@@ -3975,7 +3992,12 @@ function connectSupabase(){
   try{ sb = window.supabase.createClient(cfg.url, cfg.key); }
   catch(e){ sb = null; acctMsg('연결 설정이 올바르지 않습니다: ' + e.message, 'var(--red)'); renderAccount(); return; }
   sb.auth.onAuthStateChange((_ev, session)=>{
+    const prevId = sbUser ? sbUser.id : null;
     sbUser = session ? session.user : null;
+    const newId = sbUser ? sbUser.id : null;
+    // Signed out, expired, or switched accounts (also from another tab):
+    // nothing from the previous account may stay on screen.
+    if(prevId && prevId !== newId) wipeForAccountChange();
     if(sbUser) acctMsg('');
     renderAccount();
   });
@@ -4008,8 +4030,8 @@ async function acctSignIn(){
 }
 async function acctSignOut(){
   state.guest = false;
+  await wipeForAccountChange();
   if(sb) await sb.auth.signOut();
-  state.sessionId = null;
   acctMsg('');
 }
 function newSessionId(){
@@ -4026,7 +4048,9 @@ function shortTitle(q){
 }
 async function saveCurrentSession(){
   if(!sb || !sbUser || !state.history.length) return;
+  if(state.convOwner && state.convOwner !== sbUser.id) return;
   if(!state.sessionId) state.sessionId = newSessionId();
+  state.convOwner = sbUser.id;
   const title = state.title || shortTitle(state.history[0].question);
   const { error } = await sb.from('magi_sessions').upsert({
     id: state.sessionId, user_id: sbUser.id, title: title,
@@ -4063,6 +4087,7 @@ async function openSession(id){
   state.history = Array.isArray(d.history) ? d.history : [];
   state.round = d.round || state.history.length;
   state.sessionId = id;
+  state.convOwner = sbUser ? sbUser.id : null;
   state.title = d.title || data.title || null;
   closeDrawer();
   updateInputMode();
