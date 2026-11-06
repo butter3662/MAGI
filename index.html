@@ -841,7 +841,7 @@
       <button class="ptab" data-provider="gemini">Gemini</button>
       <button class="ptab" data-provider="claude">Claude</button>
       <button class="ptab" data-provider="gpt">GPT</button>
-      <button class="ptab" data-provider="pi">Pi 서버</button>
+      <button class="ptab" data-provider="pi">개인 서버</button>
     </div>
 
     <label id="keyLabel">API 키</label>
@@ -937,7 +937,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.1.0</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.1.1</span></footer>
 </div>
 
 <script>
@@ -1038,12 +1038,12 @@ const PROVIDERS = {
     modelHint:'mini / nano가 저렴합니다. "목록" 버튼으로 실제 사용 가능한 모델을 확인하세요.'
   },
   pi: {
-    label:'Pi 서버',
-    keyLabel:'파이 서버 주소 (Tailscale Funnel)',
+    label:'개인 서버',
+    keyLabel:'개인 서버 주소 (Tailscale Funnel)',
     keyPlaceholder:'https://이름.tail0000.ts.net',
     defaultModel:'auto:smart',
     models:['auto:smart','auto','auto:fast','auto:reliable'],
-    keyHint:'라즈베리파이 문지기(pi-gateway) 주소를 넣습니다. 키가 아니라 주소이며, 접속 허용은 지금 로그인한 MAGI 계정으로 확인합니다. AI 키는 모두 파이 안에만 있습니다.',
+    keyHint:'개인 서버 문지기(pi-gateway) 주소를 넣습니다. 키가 아니라 주소이며, 접속 허용은 지금 로그인한 MAGI 계정으로 확인합니다. AI 키는 모두 개인 서버 안에만 있습니다.',
     modelHint:'auto:smart는 지능 우선, auto:fast는 속도 우선으로 FreeLLMAPI가 무료 모델을 고릅니다. "목록" 버튼으로 지금 쓸 수 있는 모델을 불러오세요.'
   }
 };
@@ -2127,7 +2127,7 @@ async function callOpenRouter(apiKey, model, sys, user, temperature, maxTokens, 
   return extractAnyText(data, false);
 }
 
-/* --- Pi 서버 (FreeLLMAPI behind pi-gateway) ---
+/* --- 개인 서버 (FreeLLMAPI behind pi-gateway) ---
    The "key" for this provider is the gateway address, not a secret.
    The gateway checks the Supabase login and adds the FreeLLMAPI key itself,
    so no AI key ever reaches the browser. */
@@ -2137,7 +2137,7 @@ function piBase(addr){
   return s.replace(/\/v1$/,'');
 }
 async function piToken(){
-  const fail = why => { const e = new Error('Pi 서버는 MAGI에 로그인해야 쓸 수 있습니다. ' + why + '  [014]'); e.code = '014'; return e; };
+  const fail = why => { const e = new Error('개인 서버는 MAGI에 로그인해야 쓸 수 있습니다. ' + why + '  [014]'); e.code = '014'; return e; };
   if(!sb) throw fail('로그인 서버에 연결되어 있지 않습니다.');
   let t = '';
   try{
@@ -2645,7 +2645,7 @@ const ERROR_CODES = {
   '010': { t:'원인 불명', d:'분류되지 않은 오류입니다. 잠시 후 재시도하거나 다른 모델을 선택해 보세요.', c:'warn' },
   '011': { t:'빈 응답', d:'호출은 성공했지만 모델이 본문을 반환하지 않았습니다. 추론형 모델이 생각 과정에 토큰을 모두 소진했거나, 이 앱의 JSON 형식을 따르지 못하는 모델일 수 있습니다. 다른 모델을 선택하세요.', c:'bad' },
   '013': { t:'응답 시간 초과', d:'모델이 제한 시간(호출 1회당 일반 120초·문제 풀이 180초, 노드 1개당 단계별 일반 4분·문제 풀이 5분 30초) 안에 답하지 않았습니다. 무료 모델은 대기열이 길면 몇 분씩 걸립니다. 자동 대체를 켜 두면 다른 모델로 넘어갑니다.', c:'warn' },
-  '014': { t:'Pi 서버 접속 거부', d:'MAGI에 로그인했는지, 파이 서버 주소가 맞는지, 이 계정이 파이 서버 허용 목록(ALLOWED_USER_IDS)에 있는지 확인하세요.', c:'bad' },
+  '014': { t:'개인 서버 접속 거부', d:'MAGI에 로그인했는지, 개인 서버 주소가 맞는지, 이 계정이 개인 서버 허용 목록(ALLOWED_USER_IDS)에 있는지 확인하세요.', c:'bad' },
   '012': { t:'제공사 내부 오류', d:'요청은 접수됐지만 제공사가 응답 본문에 오류를 담아 반환했습니다. 해당 모델이 일시적으로 내려갔거나 중개 서버가 모델을 찾지 못한 경우입니다.', c:'warn' }
 };
 

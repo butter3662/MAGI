@@ -139,9 +139,9 @@ async function forward(req, res, path, body){
     else res.end();
   }catch(e){
     if(ctrl.signal.aborted && res.writableEnded) return;
-    if(ctrl.signal.aborted) return fail(res, 504, '파이 서버(FreeLLMAPI)가 제한 시간 안에 답하지 않았습니다.');
+    if(ctrl.signal.aborted) return fail(res, 504, '개인 서버(FreeLLMAPI)가 제한 시간 안에 답하지 않았습니다.');
     console.error('[gateway] FreeLLMAPI 연결 실패:', e.message);
-    fail(res, 502, '파이 서버 안의 FreeLLMAPI에 연결하지 못했습니다. FreeLLMAPI가 켜져 있는지 확인하세요.');
+    fail(res, 502, '개인 서버 안의 FreeLLMAPI에 연결하지 못했습니다. FreeLLMAPI가 켜져 있는지 확인하세요.');
   }finally{
     clearTimeout(timer);
   }
@@ -170,7 +170,7 @@ const server = http.createServer(async (req, res) => {
   // 1) 로그인 확인
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  if(!token) return fail(res, 401, '파이 서버를 쓰려면 MAGI에 로그인해야 합니다. 로그인 정보가 유효하지 않습니다.');
+  if(!token) return fail(res, 401, '개인 서버를 쓰려면 MAGI에 로그인해야 합니다. 로그인 정보가 유효하지 않습니다.');
   let who;
   try{ who = await whoIs(token); }
   catch(e){
@@ -180,11 +180,11 @@ const server = http.createServer(async (req, res) => {
   if(!who) return fail(res, 401, '로그인 정보가 유효하지 않습니다. MAGI에서 다시 로그인하세요.');
   if(!ALLOWED_USER_IDS.has(who.uid)){
     console.warn('[gateway] 거절: 허용 목록에 없는 계정 id=' + who.uid + ' email=' + who.email);
-    return fail(res, 403, '이 파이 서버를 쓸 수 있는 계정이 아닙니다 (유효하지 않은 사용자).');
+    return fail(res, 403, '이 개인 서버를 쓸 수 있는 계정이 아닙니다 (유효하지 않은 사용자).');
   }
 
   // 2) 요청 수 제한
-  if(!allowRate(who.uid)) return fail(res, 429, '파이 서버 요청 한도(분당 ' + RATE_PER_MIN + '회)를 넘었습니다. 잠시 후 다시 시도하세요.');
+  if(!allowRate(who.uid)) return fail(res, 429, '개인 서버 요청 한도(분당 ' + RATE_PER_MIN + '회)를 넘었습니다. 잠시 후 다시 시도하세요.');
 
   // 3) 넘기기
   if(isModels){
