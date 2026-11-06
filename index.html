@@ -937,7 +937,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.1.1</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.1.2</span></footer>
 </div>
 
 <script>
@@ -1930,6 +1930,7 @@ function populateProviderSelects(){
 
 // Warn about any slot whose provider has no key entered yet.
 function refreshNodeKeyStatus(){
+  refreshPersonalServerUI();
   if(!diffModelToggle.checked){ nodeKeyStatus.textContent=''; return; }
   syncCurrentKey();
   const missing = [];
@@ -2940,6 +2941,7 @@ function setProvider(p, opts){
     : '이미지 · 텍스트 (PDF는 Claude/Gemini만)';
   availShared.textContent = ''; availShared.className = 'avail';
   if(!opts.initial) scheduleCheck(null, 0);
+  refreshPersonalServerUI();
 
   const ids = modelsFor(p);
   if(ids.indexOf(modelShared.value.trim()) === -1) modelShared.value = cfg.defaultModel;
@@ -3467,7 +3469,25 @@ function isCacheFresh(id){
 --------------------------------------------------------------------- */
 const FAILOVER_TTL_MS = 30 * 60 * 1000;
 const NON_CHAT_RE = /embed|tts|audio|imagen|image-gen|veo|whisper|dall-e|moderation|transcri|realtime|lyria|aqa|robotics|computer-use|live|guard/i;
-function failoverOn(){ return !!(failoverToggle && failoverToggle.checked); }
+/* When every node runs on the personal server, FreeLLMAPI already does two of
+   MAGI's own jobs: it moves to another free model when one fails (auto:*), and
+   it routes image requests to a vision model, so every node sees the image.
+   - Image check questions only run for nodes that cannot see the image, so
+     they never trigger. Hidden.
+   - Auto replacement can only pick other personal-server models, which hit the
+     same pool and the same server. Hidden, unless another company's key is
+     entered: then it can still move a node off a down or exhausted server. */
+function allNodesPersonal(){ return SLOTS.every(s => nodeConfig(s).provider === 'pi'); }
+function otherKeyEntered(){ return PROVIDER_ORDER.some(p => p !== 'pi' && !!keyFor(p)); }
+function failoverUseful(){ return !allNodesPersonal() || otherKeyEntered(); }
+function vqaUseful(){ return !allNodesPersonal(); }
+function refreshPersonalServerUI(){
+  const fl = failoverToggle && failoverToggle.closest('label');
+  const vl = vqaToggle && vqaToggle.closest('label');
+  if(fl) fl.style.display = failoverUseful() ? '' : 'none';
+  if(vl) vl.style.display = vqaUseful() ? '' : 'none';
+}
+function failoverOn(){ return !!(failoverToggle && failoverToggle.checked) && failoverUseful(); }
 // The config a slot actually runs on: its replacement while one is active
 // for the same original selection, otherwise the user's own choice.
 function runConfig(slot){
@@ -3488,9 +3508,13 @@ function selectorModel(){
 async function failoverCandidates(base, code, atts, tried){
   const freeOnly = isFreeModel(base.model) || base.provider === 'gemini';
   const out = [];
+  // auto:* already went through every free model on the personal server, and a
+  // server-side failure (network, login, 5xx) hits its other models the same way.
+  const skipPersonal = base.provider === 'pi' && (/^auto(:|$)/.test(base.model) || ['002','007','014'].indexOf(code) !== -1);
   for(const p of Object.keys(PROVIDERS)){
     const key = keyFor(p);
     if(!key) continue;
+    if(p === 'pi' && skipPersonal) continue;
     if(freeOnly && (p === 'claude' || p === 'gpt')) continue;
     // OpenRouter's free quota is per account, so other free models are blocked too.
     if(p === 'openrouter' && freeOnly && code === '003' && base.provider === 'openrouter') continue;
@@ -3776,7 +3800,7 @@ async function callOn(slot, cfg, sys, user, temp, maxTok, requiredKeys, atts, op
    Image check questions (Beta): text-only nodes ask what they need to see,
    and a vision model answers by looking at the original image again.
 --------------------------------------------------------------------- */
-function vqaOn(){ return !!(vqaToggle && vqaToggle.checked) && canConvert(); }
+function vqaOn(){ return !!(vqaToggle && vqaToggle.checked) && canConvert() && vqaUseful(); }
 const VQA_ASK = '\n\n[추가 출력 — visual_checks] 당신은 첨부 이미지를 직접 볼 수 없고 아래 판독 설명만 받습니다. 판독 설명이 모호하거나 틀렸을 경우 결론이 바뀔 수 있는 지점을, 원본 이미지를 보면 바로 답할 수 있는 구체적인 질문으로 최대 3개 만들어 JSON의 "visual_checks" 필드(문자열 배열)에 넣으십시오. 예: "t₁에서 A 곡선은 이미 평탄한가?", "표의 Ⅲ열 ㉡ 칸 값은 무엇인가?" 결론을 좌우하지 않는 질문은 넣지 말고, 필요 없으면 빈 배열로 두십시오.';
 function extractVisualChecks(parsed){
   const v = pick(parsed, ['visual_checks','visualChecks','확인질문']);
@@ -4476,6 +4500,7 @@ function init(){
   });
 
   loadSettings().then(()=>{
+    refreshPersonalServerUI();
     // Show status for whatever was restored, without waiting for a click.
     if(sanitizeKey(state.keys[state.provider]||'') || state.provider === 'openrouter'){
       scheduleCheck(null, 400);
