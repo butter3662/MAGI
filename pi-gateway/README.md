@@ -86,15 +86,15 @@ ssh -L 3001:127.0.0.1:3001 pi@raspberrypi.local
 ## 3. 문지기(pi-gateway) 설치
 
 ```bash
-git clone --depth 1 https://github.com/butter3662/MAGI-C.1.git ~/MAGI-C.1
+git clone --depth 1 https://github.com/butter3662/MAGI.git ~/MAGI
 
 # 문지기 전용 사용자 (로그인 불가)
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin magigw
 
 sudo mkdir -p /opt/magi-gateway
-sudo cp ~/MAGI-C.1/pi-gateway/gateway.mjs /opt/magi-gateway/
-sudo cp ~/MAGI-C.1/pi-gateway/magi-gateway.service /etc/systemd/system/
-sudo cp ~/MAGI-C.1/pi-gateway/magi-gateway.env.example /etc/magi-gateway.env
+sudo cp ~/MAGI/pi-gateway/gateway.mjs /opt/magi-gateway/
+sudo cp ~/MAGI/pi-gateway/magi-gateway.service /etc/systemd/system/
+sudo cp ~/MAGI/pi-gateway/magi-gateway.env.example /etc/magi-gateway.env
 sudo chown root:magigw /etc/magi-gateway.env
 sudo chmod 640 /etc/magi-gateway.env
 sudo nano /etc/magi-gateway.env
@@ -169,7 +169,7 @@ sudo tailscale funnel --bg 8787
 cd ~/freellmapi && git pull && docker compose pull && docker compose up -d
 
 # 문지기
-cd ~/MAGI-C.1 && git pull
+cd ~/MAGI && git pull
 sudo cp pi-gateway/gateway.mjs /opt/magi-gateway/ && sudo systemctl restart magi-gateway
 ```
 
