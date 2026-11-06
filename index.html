@@ -937,7 +937,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.1.2</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.1.3</span></footer>
 </div>
 
 <script>
@@ -1717,12 +1717,14 @@ function envInfo(){
   const isHttp = /^https?:$/.test(proto);
   return { inIframe: inIframe, proto: proto, isHttp: isHttp };
 }
-function networkErrorMessage(){
+function networkErrorMessage(providerName){
+  const who = providerName || PROVIDERS[state.provider].label;
   const e = envInfo();
   if(e.inIframe || !e.isHttp){
-    return 'OpenRouter에 연결하지 못했습니다. 이 페이지가 외부 통신이 차단된 환경(미리보기 창 등)에서 실행되고 있습니다. 파일을 내려받아 브라우저에서 직접 열거나 GitHub Pages에 올려서 실행하세요.';
+    return who + '에 연결하지 못했습니다. 이 페이지가 외부 통신이 차단된 환경(미리보기 창 등)에서 실행되고 있습니다. 파일을 내려받아 브라우저에서 직접 열거나 GitHub Pages에 올려서 실행하세요.';
   }
-  return 'OpenRouter에 연결하지 못했습니다. 인터넷 연결, 광고 차단 확장 프로그램, 방화벽 설정을 확인하세요.';
+  if(who === PROVIDERS.pi.label) return who + '에 연결하지 못했습니다. 개인 서버(파이)가 켜져 있고 인터넷에 연결되어 있는지 확인하세요.';
+  return who + '에 연결하지 못했습니다. 인터넷 연결, 광고 차단 확장 프로그램, 방화벽 설정을 확인하세요.';
 }
 function showEnvBannerIfNeeded(){
   const e = envInfo();
@@ -2024,7 +2026,7 @@ async function httpJSONCore(url, options, providerName, signal){
       err.code = 'CANCELLED';
       throw err;
     }
-    throw new Error(networkErrorMessage());
+    throw new Error(networkErrorMessage(providerName));
   }
   if(!res.ok){
     let raw = res.statusText;
@@ -2464,7 +2466,7 @@ async function verifyApiKey(){
       keyCheckResult.style.color = 'var(--red)';
     }
   }catch(e){
-    keyCheckResult.textContent = '✗ ' + networkErrorMessage();
+    keyCheckResult.textContent = '✗ ' + networkErrorMessage(PROVIDERS[state.provider].label);
     keyCheckResult.style.color = 'var(--red)';
   }finally{
     verifyKeyBtn.disabled = false;

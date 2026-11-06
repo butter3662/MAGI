@@ -14,7 +14,7 @@
 // 외부 패키지 없이 Node.js 20 이상만 있으면 돈다.
 
 import http from 'node:http';
-import { Readable } from 'node:stream';
+import { Readable, pipeline } from 'node:stream';
 
 const env = process.env;
 const PORT = Number(env.PORT || 8787);
@@ -135,8 +135,14 @@ async function forward(req, res, path, body){
       if(v) headers[h] = v;
     }
     res.writeHead(up.status, headers);
-    if(up.body) Readable.fromWeb(up.body).pipe(res);
-    else res.end();
+    if(up.body){
+      // pipeline (not .pipe) so an aborted or broken stream is handled here.
+      // With .pipe, a browser that gave up mid-answer raised an unhandled
+      // 'error' and crashed the gateway, dropping every other request in flight.
+      pipeline(Readable.fromWeb(up.body), res, err => {
+        if(err && err.name !== 'AbortError') console.error('[gateway] 응답 전달 중단:', err.message);
+      });
+    } else res.end();
   }catch(e){
     if(ctrl.signal.aborted && res.writableEnded) return;
     if(ctrl.signal.aborted) return fail(res, 504, '개인 서버(FreeLLMAPI)가 제한 시간 안에 답하지 않았습니다.');
@@ -204,6 +210,11 @@ const server = http.createServer(async (req, res) => {
   }
   return forward(req, res, '/v1/chat/completions', JSON.stringify(obj));
 });
+
+// 마지막 안전장치: 요청 하나의 예기치 않은 오류로 문지기 전체가 꺼져
+// 다른 요청까지 끊기는 일이 없게, 기록만 남기고 계속 돈다.
+process.on('uncaughtException', e => console.error('[gateway] 예기치 않은 오류:', e && e.stack || e));
+process.on('unhandledRejection', e => console.error('[gateway] 처리되지 않은 오류:', e && e.stack || e));
 
 // 문지기는 파이 내부(127.0.0.1)에서만 연다. 바깥 연결은 Tailscale Funnel만 이 포트로 넘겨준다.
 server.listen(PORT, '127.0.0.1', () => {
