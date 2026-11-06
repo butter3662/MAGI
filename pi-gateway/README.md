@@ -1,180 +1,452 @@
-# MAGI × 라즈베리파이 무료 LLM 서버 설치 안내
+# 라즈베리파이에서 할 일 (MAGI 개인 서버)
 
-라즈베리파이 4에 FreeLLMAPI(여러 회사의 무료 AI 한도를 묶어 주는 중계기)를 올리고, MAGI에서 '개인 서버' 공급자로 쓰는 방법이다.
-목표는 **어떤 키도 파이 밖으로 나가지 않게** 하는 것이다.
+라즈베리파이 4에 FreeLLMAPI와 문지기(pi-gateway)를 올리고, Tailscale Funnel로 문지기만 공개하는 순서다.
+모든 경로를 그대로 적었다.
 
-## 구조
+## 이 안내서의 약속
 
-```
-MAGI(브라우저, GitHub Pages)
-   │  Supabase 로그인 토큰만 보냄 (AI 키 없음)
-   ▼
-Tailscale Funnel  https://<파이이름>.<tailnet>.ts.net  (HTTPS, 공유기 포트 개방 없음)
-   ▼
-문지기 pi-gateway  127.0.0.1:8787
-   │  1) 로그인 토큰을 Supabase에 확인 → 허용 목록(ALLOWED_USER_IDS)에 있는 계정만 통과
-   │  2) 허용 사이트(butter3662.github.io)에서 온 요청만 통과
-   │  3) 채팅·모델 목록 주소만 통과, 나머지(관리 화면 포함)는 404
-   │  4) FreeLLMAPI 통합 키를 여기서 붙임
-   ▼
-FreeLLMAPI  127.0.0.1:3001  (Docker, 파이 내부 전용)
-   │  각 회사 API 키는 FreeLLMAPI 안에 암호화되어 저장됨
-   ▼
-Google, Groq, Mistral, NVIDIA ...
-```
+- Raspberry Pi Imager에서 **사용자 이름을 `pi`**, **호스트 이름을 `magi-pi`**로 만들었다고 가정한다.
+  - 다르게 만들었다면 아래의 `/home/pi`를 `/home/내사용자이름`으로, `magi-pi`를 내 호스트 이름으로 바꿔 읽는다.
+- 회색 상자 안의 명령은 **파이에 SSH로 접속한 터미널**에 한 줄씩 붙여 넣는다.
+- `<tailnet>`은 Tailscale이 정해 주는 내 네트워크 이름이다. 4단계에서 확인한다.
 
-| 키 | 있는 곳 | 인터넷에서 보이는가 |
+## 다 끝나면 생기는 것
+
+| 무엇 | 경로·주소 | 누가 볼 수 있나 |
 |---|---|---|
-| 각 회사 API 키 | FreeLLMAPI 데이터베이스 (파이) | 아니다 |
-| FreeLLMAPI 통합 키 | `/etc/magi-gateway.env` (파이) | 아니다 |
-| FreeLLMAPI 관리 화면 | 127.0.0.1:3001 (파이) | 아니다 (SSH 터널로만 접속) |
-| Supabase 공개(publishable) 키 | MAGI 코드, 문지기 설정 | 원래 공개용이라 상관없다 |
+| FreeLLMAPI 설치 폴더 | `/home/pi/freellmapi` | 파이 안 |
+| FreeLLMAPI 암호화 키 | `/home/pi/freellmapi/.env` | 파이 안 |
+| FreeLLMAPI 데이터(회사 키 등) | Docker 볼륨 `freellmapi_freellmapi-data` (`/var/lib/docker/volumes/freellmapi_freellmapi-data/_data`) | 파이 안 |
+| FreeLLMAPI 주소 | `http://127.0.0.1:3001` | 파이 안 |
+| FreeLLMAPI 관리 화면 | `https://magi-pi.<tailnet>.ts.net:8443` | 내 Tailscale 기기만 |
+| MAGI 저장소 사본 | `/home/pi/MAGI` | 파이 안 |
+| 문지기 프로그램 | `/opt/magi-gateway/gateway.mjs` | 파이 안 |
+| 문지기 설정(통합 키 포함) | `/etc/magi-gateway.env` | 파이 안 |
+| 문지기 서비스 파일 | `/etc/systemd/system/magi-gateway.service` | 파이 안 |
+| 문지기 주소 | `http://127.0.0.1:8787` | 파이 안 |
+| 공개 주소 (MAGI가 쓰는 주소) | `https://magi-pi.<tailnet>.ts.net` | 인터넷 (문지기만) |
+| Docker 로그 크기 설정 | `/etc/docker/daemon.json` | 파이 안 |
 
-## 0. 준비
+---
 
-- 라즈베리파이 OS Lite (64-bit)를 설치하고 SSH로 접속할 수 있는 상태
-- MAGI에 가입·로그인된 내 계정
-- Tailscale 계정 (무료 Personal 플랜이면 된다)
+## 0단계. 파이에 접속하기
 
-아래 명령은 모두 파이에 SSH로 접속해서 실행한다.
+PC 터미널이나 아이패드 SSH 앱(Termius 등)에서 접속한다.
 
 ```bash
-sudo apt update && sudo apt full-upgrade -y
-sudo apt install -y git openssl nodejs
-node -v   # v18 이상이면 된다
+ssh pi@magi-pi.local
 ```
 
-## 1. Docker 설치
+접속되면 지금 위치를 확인한다.
 
 ```bash
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-# 그룹 적용을 위해 SSH를 한 번 끊었다가 다시 접속한다
-docker run --rm hello-world   # 동작 확인
+pwd
 ```
 
-## 2. FreeLLMAPI 설치 (파이 내부 전용)
+`/home/pi`가 나오면 맞다.
+
+---
+
+## 1단계. 시스템 업데이트와 필요한 프로그램 설치
 
 ```bash
-git clone --depth 1 https://github.com/tashfeenahmed/freellmapi.git ~/freellmapi
-cd ~/freellmapi
-printf "ENCRYPTION_KEY=%s\nPORT=3001\n" "$(openssl rand -hex 32)" > .env
-chmod 600 .env
+sudo apt update
+sudo apt full-upgrade -y
+sudo apt install -y git openssl curl nodejs
+```
+
+Node.js가 제대로 깔렸는지 확인한다.
+
+```bash
+node -v
+which node
+```
+
+- `node -v`가 `v18` 이상이면 된다.
+- `which node`가 **`/usr/bin/node`**여야 한다. 다른 경로가 나오면 6-4에서 서비스 파일의 `ExecStart` 경로를 그 값으로 바꾼다.
+
+업데이트 뒤 한 번 재부팅한다.
+
+```bash
+sudo reboot
+```
+
+1~2분 뒤 0단계처럼 다시 접속한다.
+
+---
+
+## 2단계. Docker 설치
+
+### 2-1. 설치 스크립트를 받아서 실행
+
+```bash
+curl -fsSL https://get.docker.com -o /home/pi/get-docker.sh
+sudo sh /home/pi/get-docker.sh
+```
+
+### 2-2. `pi` 사용자가 sudo 없이 Docker를 쓰게 하기
+
+```bash
+sudo usermod -aG docker pi
+exit
+```
+
+`exit`으로 접속이 끊기면 0단계처럼 **다시 접속**한다. (그룹 변경은 다시 로그인해야 적용된다.)
+
+### 2-3. 동작 확인
+
+```bash
+docker run --rm hello-world
+```
+
+`Hello from Docker!`가 나오면 성공이다.
+
+### 2-4. Docker 로그 크기 제한 (SD 카드 보호)
+
+로그가 끝없이 쌓이면 SD 카드 수명이 줄어드니 크기를 제한한다.
+
+```bash
+sudo nano /etc/docker/daemon.json
+```
+
+아래 내용을 그대로 붙여 넣는다.
+
+```json
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+```
+
+nano 저장: `Ctrl + O` → `Enter`, 나가기: `Ctrl + X`
+
+```bash
+sudo systemctl restart docker
+```
+
+설치 스크립트 파일은 지워도 된다.
+
+```bash
+rm /home/pi/get-docker.sh
+```
+
+---
+
+## 3단계. FreeLLMAPI 설치 (파이 안에서만 열림)
+
+### 3-1. 내려받기
+
+```bash
+git clone --depth 1 https://github.com/tashfeenahmed/freellmapi.git /home/pi/freellmapi
+cd /home/pi/freellmapi
+```
+
+### 3-2. 암호화 키 만들기
+
+```bash
+printf "ENCRYPTION_KEY=%s\nPORT=3001\n" "$(openssl rand -hex 32)" > /home/pi/freellmapi/.env
+chmod 600 /home/pi/freellmapi/.env
+cat /home/pi/freellmapi/.env
+```
+
+화면에 나온 `ENCRYPTION_KEY=...` 값을 **따로 안전한 곳에 적어 둔다.** 이 키를 잃어버리면 FreeLLMAPI에 저장한 회사 키를 풀 수 없다.
+
+> `/home/pi/freellmapi/.env`에 **`HOST_BIND=0.0.0.0`은 절대 넣지 않는다.** 넣으면 관리 화면이 집 네트워크 전체에 열린다.
+
+### 3-3. 실행
+
+```bash
+cd /home/pi/freellmapi
 docker compose pull
 docker compose up -d
-docker compose ps        # freellmapi가 running이면 성공
 ```
 
-- 이 설정은 기본적으로 `127.0.0.1:3001`에만 열린다. **`HOST_BIND=0.0.0.0`은 절대 넣지 않는다.** 넣으면 관리 화면이 집 네트워크 전체에 열린다.
-- `.env`의 `ENCRYPTION_KEY`는 저장된 회사 키를 암호화하는 열쇠다. 잃어버리면 저장된 키를 못 푼다. 따로 안전한 곳에 적어 둔다.
-
-### 관리 화면 열기 (PC에서 SSH 터널)
-
-관리 화면은 인터넷에 열지 않으므로, PC에서 SSH 터널로 접속한다.
+### 3-4. 확인
 
 ```bash
-# PC 터미널에서 (pi와 raspberrypi.local은 내 사용자 이름·호스트 이름으로 바꾼다)
-ssh -L 3001:127.0.0.1:3001 pi@raspberrypi.local
+docker compose ps
 ```
 
-터널을 켜 둔 상태에서 PC 브라우저로 `http://localhost:3001`을 연다.
-
-1. 첫 계정(이메일·비밀번호)을 만든다. 설치 코드를 물으면 파이에서 `cd ~/freellmapi && docker compose logs freellmapi | tail -50`으로 로그에 찍힌 코드를 확인한다.
-2. **Keys** 페이지에서 쓸 회사의 API 키를 넣는다. Google AI Studio, Groq, Mistral, NVIDIA, Cloudflare처럼 공식 회사 키부터 넣는 것을 권한다.
-3. **Keys** 페이지 위쪽의 **통합 키**(freellmapi-로 시작)를 복사해 둔다. 3단계에서 쓴다.
-
-## 3. 문지기(pi-gateway) 설치
+`freellmapi`의 STATUS가 `Up`(잠시 뒤 `healthy`)이면 된다.
 
 ```bash
-git clone --depth 1 https://github.com/butter3662/MAGI.git ~/MAGI
+sudo ss -ltnp | grep 3001
+```
 
-# 문지기 전용 사용자 (로그인 불가)
+**`127.0.0.1:3001`**만 보여야 한다. `0.0.0.0:3001`이나 `*:3001`이 보이면 3-2의 `.env`를 다시 확인한다.
+
+```bash
+curl -sI http://127.0.0.1:3001/ | head -1
+```
+
+`HTTP/1.1`로 시작하는 줄이 나오면 켜져 있는 것이다.
+
+데이터가 저장되는 실제 위치를 확인해 둔다.
+
+```bash
+docker volume inspect freellmapi_freellmapi-data --format '{{ .Mountpoint }}'
+```
+
+`/var/lib/docker/volumes/freellmapi_freellmapi-data/_data`가 나온다.
+
+---
+
+## 4단계. Tailscale 설치와 관리 화면 연결 (내 기기에서만)
+
+### 4-1. 설치
+
+```bash
+curl -fsSL https://tailscale.com/install.sh -o /home/pi/tailscale-install.sh
+sudo sh /home/pi/tailscale-install.sh
+rm /home/pi/tailscale-install.sh
+```
+
+### 4-2. 로그인
+
+```bash
+sudo tailscale up
+```
+
+화면에 나온 `https://login.tailscale.com/...` 링크를 휴대폰이나 아이패드에서 열고 내 Tailscale 계정으로 로그인한다.
+
+```bash
+tailscale status
+```
+
+첫 줄에 `magi-pi`가 보이면 등록된 것이다.
+
+### 4-3. 관리 화면을 내 Tailscale 기기에만 연결 (Serve, 비공개)
+
+```bash
+sudo tailscale serve --bg --https=8443 http://127.0.0.1:3001
+```
+
+- 처음이면 HTTPS 인증서 사용을 허가하라는 링크가 나온다. 링크를 열어 허가하고, 같은 명령을 한 번 더 실행한다.
+
+```bash
+sudo tailscale serve status
+```
+
+`https://magi-pi.<tailnet>.ts.net:8443`처럼 나온다. **여기서 `<tailnet>` 부분(예: `tail1234`)이 내 네트워크 이름이다.** 적어 둔다.
+
+> 이 8443 주소는 **Serve(비공개)**라서 내 Tailscale 계정에 로그인된 기기에서만 열린다. 인터넷에는 공개되지 않는다.
+
+---
+
+## 5단계. FreeLLMAPI 관리 화면 설정 (브라우저)
+
+이 단계만 파이가 아니라 아이패드나 PC 브라우저에서 한다.
+
+### 5-1. 브라우저 기기에 Tailscale 앱 설치
+
+아이패드·PC에 Tailscale 앱을 설치하고 **4-2와 같은 계정**으로 로그인한 뒤 켠다.
+
+### 5-2. 관리 화면 열기
+
+브라우저에서 `https://magi-pi.<tailnet>.ts.net:8443`을 연다.
+
+### 5-3. 첫 계정 만들기
+
+이메일·비밀번호로 관리자 계정을 만든다. **설치 코드(setup code)**를 물으면 파이 터미널에서 확인한다.
+
+```bash
+cd /home/pi/freellmapi
+docker compose logs freellmapi | grep -i "setup code"
+```
+
+`First-run setup code: ...`의 값을 입력한다.
+
+### 5-4. 회사 API 키 넣기
+
+**Keys** 페이지에서 쓸 회사의 키를 넣는다. 공식 회사(Google AI Studio, Groq, Mistral, NVIDIA, Cloudflare 등)부터 넣는 것을 권한다.
+
+### 5-5. 통합 키 복사
+
+**Keys** 페이지 위쪽의 **통합 키**(`freellmapi-`로 시작)를 복사해 둔다. 6-3에서 쓴다.
+
+---
+
+## 6단계. 문지기(pi-gateway) 설치
+
+### 6-1. MAGI 저장소 내려받기
+
+```bash
+git clone --depth 1 https://github.com/butter3662/MAGI.git /home/pi/MAGI
+ls /home/pi/MAGI/pi-gateway
+```
+
+`gateway.mjs`, `magi-gateway.service`, `magi-gateway.env.example`, `README.md`가 보이면 된다.
+
+### 6-2. 문지기 전용 사용자와 폴더 만들기
+
+```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin magigw
-
 sudo mkdir -p /opt/magi-gateway
-sudo cp ~/MAGI/pi-gateway/gateway.mjs /opt/magi-gateway/
-sudo cp ~/MAGI/pi-gateway/magi-gateway.service /etc/systemd/system/
-sudo cp ~/MAGI/pi-gateway/magi-gateway.env.example /etc/magi-gateway.env
+sudo cp /home/pi/MAGI/pi-gateway/gateway.mjs /opt/magi-gateway/gateway.mjs
+sudo cp /home/pi/MAGI/pi-gateway/magi-gateway.service /etc/systemd/system/magi-gateway.service
+sudo cp /home/pi/MAGI/pi-gateway/magi-gateway.env.example /etc/magi-gateway.env
 sudo chown root:magigw /etc/magi-gateway.env
 sudo chmod 640 /etc/magi-gateway.env
+```
+
+### 6-3. 설정 파일 채우기
+
+```bash
 sudo nano /etc/magi-gateway.env
 ```
 
-`/etc/magi-gateway.env`에서 두 값을 채운다.
+두 줄을 채운다. (나머지는 그대로 둔다.)
 
-- `FREELLMAPI_KEY=` 뒤에 2단계에서 복사한 통합 키
-- `ALLOWED_USER_IDS=` 뒤에 내 Supabase 사용자 ID
-  - Supabase 대시보드 → Authentication → Users에서 내 계정의 UID를 복사한다.
-  - 찾기 어려우면 비워 둔 채 5단계까지 진행한다. MAGI에서 '키 확인'을 누르면 거절되면서 로그에 `거절: ... id=...`가 찍히니, 그 id를 넣으면 된다.
+```
+FREELLMAPI_KEY=freellmapi-...(5-5에서 복사한 통합 키)
+ALLOWED_USER_IDS=(내 Supabase 사용자 ID)
+```
+
+**내 Supabase 사용자 ID 찾기**: Supabase 대시보드(supabase.com) → MAGI가 쓰는 프로젝트 → **Authentication** → **Users** → 내 이메일 줄의 **UID**를 복사한다. (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` 형태)
+
+저장: `Ctrl + O` → `Enter`, 나가기: `Ctrl + X`
+
+### 6-4. 서비스 켜기
+
+1단계의 `which node`가 `/usr/bin/node`가 아니었다면 먼저 서비스 파일을 고친다.
+
+```bash
+sudo nano /etc/systemd/system/magi-gateway.service
+```
+
+`ExecStart=/usr/bin/node /opt/magi-gateway/gateway.mjs`의 `/usr/bin/node` 부분을 `which node` 결과로 바꾼다. (`/usr/bin/node`였다면 이 과정은 건너뛴다.)
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now magi-gateway
-sudo systemctl status magi-gateway --no-pager
-curl http://127.0.0.1:8787/health      # {"ok":true} 이면 성공
+systemctl status magi-gateway --no-pager
 ```
 
-로그 보기: `journalctl -u magi-gateway -f`
-설정을 바꾼 뒤에는: `sudo systemctl restart magi-gateway`
+`Active: active (running)`이 보이고, 로그에 `127.0.0.1:8787 에서 대기 중`이 나오면 성공이다.
 
-## 4. Tailscale Funnel로 문지기만 공개
+### 6-5. 확인
 
 ```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up            # 나오는 링크를 열어 내 Tailscale 계정에 파이를 등록
+curl -s http://127.0.0.1:8787/health
+```
+
+`{"ok":true}`가 나와야 한다.
+
+```bash
+sudo ss -ltnp | grep 8787
+```
+
+**`127.0.0.1:8787`**만 보여야 한다.
+
+---
+
+## 7단계. 문지기만 인터넷에 공개 (Funnel)
+
+```bash
 sudo tailscale funnel --bg 8787
 ```
 
-- 처음 실행하면 MagicDNS, HTTPS 인증서, Funnel 사용 허가를 묻는 링크가 나온다. 링크를 열어 모두 허용한다.
-- `--bg`로 켜 두면 재부팅 뒤에도 자동으로 다시 켜진다.
-- `tailscale funnel status`로 공개 주소(`https://<파이이름>.<tailnet>.ts.net`)를 확인한다. 새 주소는 퍼지는 데 최대 10분쯤 걸릴 수 있다.
-- **8787(문지기)만 공개한다. 3001(FreeLLMAPI)은 절대 Funnel에 올리지 않는다.**
-- 끌 때: `sudo tailscale funnel reset`
+- 처음이면 Funnel 사용을 허가하라는 링크가 나온다. 링크를 열어 허가하고, 같은 명령을 한 번 더 실행한다.
 
-### 공개 확인 (휴대폰 데이터로 접속해 보면 확실하다)
+```bash
+sudo tailscale funnel status
+```
+
+아래 두 가지가 보이면 맞다. (표시 모양은 Tailscale 버전에 따라 조금 다를 수 있다.)
+
+- `https://magi-pi.<tailnet>.ts.net` 옆에 **Funnel on**, 그 아래에 `proxy http://127.0.0.1:8787`
+- `https://magi-pi.<tailnet>.ts.net:8443` 옆에 **tailnet only**, 그 아래에 `proxy http://127.0.0.1:3001`
+
+> **3001(FreeLLMAPI)은 절대 Funnel에 올리지 않는다.** Funnel에는 8787(문지기)만 올린다.
+
+새 공개 주소는 퍼지는 데 최대 10분쯤 걸릴 수 있다.
+
+---
+
+## 8단계. 밖에서 확인 (휴대폰 데이터로)
+
+휴대폰 와이파이를 끄고, **휴대폰의 Tailscale 앱도 끈 상태**에서 브라우저로 열어 본다.
 
 | 주소 | 정상 결과 |
 |---|---|
-| `https://<주소>/health` | `{"ok":true}` |
-| `https://<주소>/` | `없는 주소입니다` (404). 관리 화면이 안 보여야 정상 |
-| `https://<주소>/v1/models` | 로그인 필요 (401) |
+| `https://magi-pi.<tailnet>.ts.net/health` | `{"ok":true}` |
+| `https://magi-pi.<tailnet>.ts.net/` | `없는 주소입니다` (관리 화면이 보이면 안 된다) |
+| `https://magi-pi.<tailnet>.ts.net/v1/models` | 로그인이 필요하다는 메시지 |
+| `https://magi-pi.<tailnet>.ts.net:8443` | 열리지 않아야 정상 (내 기기 전용) |
 
-## 5. MAGI에 연결
+---
 
-1. MAGI에 로그인한다. (개인 서버는 로그인해야만 쓸 수 있다.)
-2. 설정 → AI 제공사에서 **개인 서버** 탭을 누른다.
-3. 주소 칸에 `https://<파이이름>.<tailnet>.ts.net`을 넣고 **키 확인**을 누른다.
-   `✓ 개인 서버 연결이 확인되었습니다 · 지금 쓸 수 있는 모델 N개`가 나오면 성공이다.
-4. **목록**을 누르면 FreeLLMAPI에서 지금 쓸 수 있는 모델이 불러와진다.
-   - `auto:smart`: 지능 우선으로 자동 선택 (기본값)
-   - `auto:fast`: 속도 우선
-   - 모델 ID를 직접 고르면 그 모델로 고정된다.
-5. 노드마다 다른 공급자를 쓰려면 '노드별로 다른 AI 사용 (고급)'을 켜고, 노드별로 개인 서버와 다른 공급자를 섞어 쓸 수 있다.
+## 9단계. MAGI에 연결 (파이 밖, 참고)
 
-## 문제 해결
+MAGI → 설정 → **개인 서버** 탭 → 주소 칸에 `https://magi-pi.<tailnet>.ts.net` → **키 확인**.
+`✓ 개인 서버 연결이 확인되었습니다`가 나오면 끝이다.
 
-| 증상 | 원인과 해결 |
+---
+
+## 자주 쓰는 명령
+
+| 하고 싶은 것 | 명령 |
 |---|---|
-| `개인 서버는 MAGI에 로그인해야 쓸 수 있습니다` | MAGI에서 로그인한다 |
-| `이 개인 서버를 쓸 수 있는 계정이 아닙니다` | `ALLOWED_USER_IDS`에 내 UID를 넣고 `sudo systemctl restart magi-gateway` |
-| `허용되지 않은 사이트에서 온 요청입니다` | `ALLOWED_ORIGINS`가 `https://butter3662.github.io`인지 확인 (끝에 / 없음) |
-| `FreeLLMAPI에 연결하지 못했습니다` | `cd ~/freellmapi && docker compose ps`로 켜져 있는지 확인, 꺼졌으면 `docker compose up -d` |
-| `네트워크 오류` | 파이 전원·인터넷, `tailscale funnel status` 확인 |
-| `요청 한도를 초과했습니다` | 무료 한도 소진 또는 `RATE_PER_MIN` 초과. FreeLLMAPI 관리 화면에서 키 상태 확인 |
+| 문지기 로그 실시간 보기 | `journalctl -u magi-gateway -f` |
+| 문지기 다시 시작 (설정 바꾼 뒤) | `sudo systemctl restart magi-gateway` |
+| 문지기 설정 고치기 | `sudo nano /etc/magi-gateway.env` |
+| FreeLLMAPI 상태 | `cd /home/pi/freellmapi && docker compose ps` |
+| FreeLLMAPI 로그 | `cd /home/pi/freellmapi && docker compose logs --tail 100 freellmapi` |
+| FreeLLMAPI 다시 시작 | `cd /home/pi/freellmapi && docker compose restart` |
+| 공개·비공개 연결 상태 | `sudo tailscale funnel status` |
+| 공개 끄기 (문지기) | `sudo tailscale funnel --https=443 off` |
+| 관리 화면 연결 끄기 | `sudo tailscale serve --https=8443 off` |
+| 파이 온도 | `vcgencmd measure_temp` |
 
 ## 업데이트
 
-```bash
-# FreeLLMAPI
-cd ~/freellmapi && git pull && docker compose pull && docker compose up -d
+FreeLLMAPI:
 
-# 문지기
-cd ~/MAGI && git pull
-sudo cp pi-gateway/gateway.mjs /opt/magi-gateway/ && sudo systemctl restart magi-gateway
+```bash
+cd /home/pi/freellmapi
+git pull
+docker compose pull
+docker compose up -d
 ```
+
+문지기:
+
+```bash
+cd /home/pi/MAGI
+git pull
+sudo cp /home/pi/MAGI/pi-gateway/gateway.mjs /opt/magi-gateway/gateway.mjs
+sudo systemctl restart magi-gateway
+```
+
+## 백업 (SD 카드 고장 대비)
+
+```bash
+mkdir -p /home/pi/backup
+cp /home/pi/freellmapi/.env /home/pi/backup/freellmapi.env
+sudo cp /etc/magi-gateway.env /home/pi/backup/magi-gateway.env
+cd /home/pi/freellmapi
+docker compose stop
+docker run --rm -v freellmapi_freellmapi-data:/data -v /home/pi/backup:/backup alpine tar czf /backup/freellmapi-data.tgz -C /data .
+docker compose start
+sudo chown pi:pi /home/pi/backup/*
+chmod 600 /home/pi/backup/*
+```
+
+`/home/pi/backup` 폴더의 세 파일을 PC로 옮겨 둔다. 이 파일에는 키가 들어 있으니 GitHub 같은 곳에 올리지 않는다.
+
+## 문제 해결
+
+| MAGI에 나오는 메시지 | 확인할 것 |
+|---|---|
+| `개인 서버는 MAGI에 로그인해야 쓸 수 있습니다` | MAGI에서 로그인 |
+| `이 개인 서버를 쓸 수 있는 계정이 아닙니다` | `/etc/magi-gateway.env`의 `ALLOWED_USER_IDS`. `journalctl -u magi-gateway -n 20`에 찍힌 `id=...`와 같은지 비교 → 고친 뒤 `sudo systemctl restart magi-gateway` |
+| `허용되지 않은 사이트에서 온 요청입니다` | `/etc/magi-gateway.env`의 `ALLOWED_ORIGINS=https://butter3662.github.io` (끝에 `/` 없음) |
+| `FreeLLMAPI에 연결하지 못했습니다` | `cd /home/pi/freellmapi && docker compose ps` → 꺼져 있으면 `docker compose up -d` |
+| `네트워크 오류` | 파이 전원·인터넷, `sudo tailscale funnel status` |
+| `요청 한도를 초과했습니다` | 관리 화면(8443)에서 회사 키 상태 확인, 또는 `RATE_PER_MIN` 값 |
 
 ## 알아 둘 점
 
-- FreeLLMAPI는 개인 실험용이다. 각 회사 무료 티어 약관이 그대로 적용되고, 한도와 제공 모델은 예고 없이 바뀐다.
+- FreeLLMAPI는 개인 실험용이다. 각 회사 무료 티어 약관이 그대로 적용되고, 한도와 모델은 예고 없이 바뀐다.
 - Tailscale Funnel은 베타 기능이고, Funnel로 오가는 트래픽에는 조절할 수 없는 대역폭 제한이 있다.
-- 무료 모델로 가는 질문과 첨부 파일은 그 모델을 제공하는 회사로 전달된다. 민감한 내용은 넣지 않는다.
+- 무료 모델로 보낸 질문과 첨부 파일은 그 모델을 제공하는 회사로 전달된다. 민감한 내용은 넣지 않는다.
