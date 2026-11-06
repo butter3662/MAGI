@@ -1,0 +1,27 @@
+[Unit]
+Description=MAGI pi-gateway (Supabase 로그인 확인 후 FreeLLMAPI로 전달)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=magigw
+EnvironmentFile=/etc/magi-gateway.env
+ExecStart=/usr/bin/node /opt/magi-gateway/gateway.mjs
+Restart=always
+RestartSec=5
+
+# 이 프로그램은 파일을 쓸 일이 없으므로 시스템을 최대한 잠근다.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
