@@ -854,7 +854,7 @@
     <div class="hint" id="keyHint"></div>
     <div class="keyrow" id="piPowerRow" style="display:none">
       <button class="iconbtn" id="piPowerBtn" type="button">개인 서버 끄기</button>
-      <span class="hint" id="piPowerResult">파이를 안전하게 끕니다. 초록 불이 멈춘 뒤 전원을 뽑으세요.</span>
+      <span class="hint" id="piPowerResult"></span>
     </div>
 
     <label>모델 검색</label>
@@ -941,7 +941,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.0</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.1</span></footer>
 </div>
 
 <script>
@@ -2146,6 +2146,12 @@ function piBase(addr){
   if(s && !/^https?:\/\//i.test(s)) s = 'https://' + s;
   return s.replace(/\/v1$/,'');
 }
+const PI_POWER_HINT = '파이를 안전하게 끕니다. 초록 불이 멈춘 뒤 전원을 뽑으세요.';
+function resetPiPowerResult(){
+  piPowerResult.textContent = PI_POWER_HINT;
+  piPowerResult.style.color = '';
+}
+
 /* Shut the Pi down through the gateway (same login + allowlist as chat). */
 async function powerOffPersonalServer(){
   const addr = keyFor('pi');
@@ -4420,6 +4426,14 @@ function init(){
   });
   verifyKeyBtn.addEventListener('click', verifyApiKey);
   piPowerBtn.addEventListener('click', powerOffPersonalServer);
+  resetPiPowerResult();
+  // The shutdown result is about that one press: any other settings button
+  // (키 확인, 목록, 전체확인, tabs...) or editing the address puts the hint back.
+  settingsBody.addEventListener('click', e=>{
+    const b = e.target.closest('button');
+    if(b && b !== piPowerBtn) resetPiPowerResult();
+  });
+  apiKeyInput.addEventListener('input', resetPiPowerResult);
   fetchModelsBtn.addEventListener('click', async ()=>{ await loadModelList(); openModelDrop(); });
   checkModelsBtn.addEventListener('click', checkAllModels);
   codeRefToggle.addEventListener('click', ()=>{
