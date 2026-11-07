@@ -1,0 +1,10 @@
+[Unit]
+Description=MAGI 개인 서버 원격 종료 요청 감시
+
+[Path]
+# 문지기가 이 파일을 만들면 magi-poweroff.service가 실행된다.
+PathExists=/run/magi-gateway/poweroff
+Unit=magi-poweroff.service
+
+[Install]
+WantedBy=multi-user.target

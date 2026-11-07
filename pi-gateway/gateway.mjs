@@ -15,6 +15,7 @@
 
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
+import fs from 'node:fs';
 
 const env = process.env;
 const PORT = Number(env.PORT || 8787);
@@ -28,6 +29,9 @@ const RATE_PER_MIN = Number(env.RATE_PER_MIN || 60);
 const MAX_BODY = Math.round(Number(env.MAX_BODY_MB || 20) * 1024 * 1024);
 const UPSTREAM_TIMEOUT_MS = Number(env.UPSTREAM_TIMEOUT_MS || 330000);
 const TOKEN_CACHE_MS = 60 * 1000;
+// 원격 종료: 문지기는 권한이 없으므로 이 파일만 만들고,
+// root 권한의 magi-poweroff.path가 파일을 보고 파이를 끈다.
+const POWEROFF_FLAG = env.POWEROFF_FLAG || '/run/magi-gateway/poweroff';
 
 function list(v){ return String(v || '').split(',').map(s => s.trim()).filter(Boolean); }
 
@@ -171,7 +175,8 @@ const server = http.createServer(async (req, res) => {
 
   const isChat = req.method === 'POST' && path === '/v1/chat/completions';
   const isModels = req.method === 'GET' && path === '/v1/models';
-  if(!isChat && !isModels) return fail(res, 404, '없는 주소입니다.');
+  const isPoweroff = req.method === 'POST' && path === '/admin/poweroff';
+  if(!isChat && !isModels && !isPoweroff) return fail(res, 404, '없는 주소입니다.');
 
   // 1) 로그인 확인
   const auth = req.headers.authorization || '';
@@ -191,6 +196,19 @@ const server = http.createServer(async (req, res) => {
 
   // 2) 요청 수 제한
   if(!allowRate(who.uid)) return fail(res, 429, '개인 서버 요청 한도(분당 ' + RATE_PER_MIN + '회)를 넘었습니다. 잠시 후 다시 시도하세요.');
+
+  // 원격 종료 (로그인 + 허용 계정 확인을 통과한 경우에만)
+  if(isPoweroff){
+    try{
+      fs.writeFileSync(POWEROFF_FLAG, new Date().toISOString() + ' ' + who.uid + '\n');
+    }catch(e){
+      console.error('[gateway] 종료 요청 기록 실패:', e.message);
+      return fail(res, 500, '종료 기능이 설치되어 있지 않습니다. 설치 안내의 "원격 종료" 단계를 확인하세요.');
+    }
+    console.warn('[gateway] 원격 종료 요청 (id=' + who.uid + ')');
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ ok: true, message: '종료 명령을 보냈습니다.' }));
+  }
 
   // 3) 넘기기
   if(isModels){

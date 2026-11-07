@@ -398,6 +398,26 @@ MAGI → 설정 → **개인 서버** 탭 → 주소 칸에 `https://magi-pi.<ta
 | 관리 화면 연결 끄기 | `sudo tailscale serve --https=8443 off` |
 | 파이 온도 | `vcgencmd measure_temp` |
 
+## 원격 종료 (MAGI의 '개인 서버 끄기' 버튼)
+
+MAGI 설정 → 개인 서버 탭의 **개인 서버 끄기** 버튼으로 파이를 안전하게 끌 수 있다.
+문지기는 권한이 없어서 `/run/magi-gateway/poweroff` 파일만 만들고, root 권한의 `magi-poweroff.path`가 그 파일을 보고 파이를 끈다.
+버튼도 채팅과 똑같이 로그인 + 허용 계정(ALLOWED_USER_IDS) 확인을 통과해야만 작동한다.
+
+설치 (한 번만):
+
+```bash
+cd /home/pi/MAGI && git pull
+sudo cp /home/pi/MAGI/pi-gateway/gateway.mjs /opt/magi-gateway/gateway.mjs
+sudo cp /home/pi/MAGI/pi-gateway/magi-gateway.service /etc/systemd/system/magi-gateway.service
+sudo sed -i "s|/usr/bin/node|$(which node)|" /etc/systemd/system/magi-gateway.service
+sudo cp /home/pi/MAGI/pi-gateway/magi-poweroff.path /etc/systemd/system/magi-poweroff.path
+sudo cp /home/pi/MAGI/pi-gateway/magi-poweroff.service /etc/systemd/system/magi-poweroff.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now magi-poweroff.path
+sudo systemctl restart magi-gateway
+```
+
 ## 업데이트
 
 FreeLLMAPI:

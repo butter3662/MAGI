@@ -852,6 +852,10 @@
     </div>
     <div class="key-check-result" id="keyCheckResult"></div>
     <div class="hint" id="keyHint"></div>
+    <div class="keyrow" id="piPowerRow" style="display:none">
+      <button class="iconbtn" id="piPowerBtn" type="button">개인 서버 끄기</button>
+      <span class="hint" id="piPowerResult">파이를 안전하게 끕니다. 초록 불이 멈춘 뒤 전원을 뽑으세요.</span>
+    </div>
 
     <label>모델 검색</label>
     <div class="keyrow">
@@ -937,7 +941,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.1.3</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.0</span></footer>
 </div>
 
 <script>
@@ -1096,6 +1100,9 @@ const settingsBody = $('settingsBody');
 const apiKeyInput = $('apiKeyInput');
 const toggleKeyVis = $('toggleKeyVis');
 const verifyKeyBtn = $('verifyKeyBtn');
+const piPowerRow = $('piPowerRow');
+const piPowerBtn = $('piPowerBtn');
+const piPowerResult = $('piPowerResult');
 const keyCheckResult = $('keyCheckResult');
 const modelShared = $('modelShared');
 const diffModelToggle = $('diffModelToggle');
@@ -2139,6 +2146,35 @@ function piBase(addr){
   if(s && !/^https?:\/\//i.test(s)) s = 'https://' + s;
   return s.replace(/\/v1$/,'');
 }
+/* Shut the Pi down through the gateway (same login + allowlist as chat). */
+async function powerOffPersonalServer(){
+  const addr = keyFor('pi');
+  if(!addr){ piPowerResult.textContent = '✗ 개인 서버 주소를 먼저 넣으세요.'; piPowerResult.style.color = 'var(--red)'; return; }
+  if(!window.confirm('개인 서버(라즈베리파이)를 끌까요?\n끈 뒤에는 전원을 뽑았다 다시 꽂아야 켜집니다.')) return;
+  piPowerBtn.disabled = true;
+  piPowerResult.style.color = '';
+  piPowerResult.textContent = '종료 명령을 보내는 중...';
+  try{
+    const res = await fetch(piBase(addr) + '/admin/poweroff', {
+      method:'POST', headers:{ 'Authorization':'Bearer ' + await piToken() }
+    });
+    let msg = 'HTTP ' + res.status;
+    try{ const j = await res.json(); msg = (j.error && j.error.message) || j.message || msg; }catch(e){}
+    if(res.ok){
+      piPowerResult.textContent = '✓ 종료 명령을 보냈습니다. 20초쯤 뒤 초록 불이 멈추면 전원을 뽑으세요.';
+      piPowerResult.style.color = 'var(--green-core)';
+    } else {
+      piPowerResult.textContent = '✗ ' + msg;
+      piPowerResult.style.color = 'var(--red)';
+    }
+  }catch(e){
+    piPowerResult.textContent = '✗ ' + (e.code === '014' ? e.message.replace(/\s*\[\d+\]$/,'') : networkErrorMessage(PROVIDERS.pi.label));
+    piPowerResult.style.color = 'var(--red)';
+  }finally{
+    piPowerBtn.disabled = false;
+  }
+}
+
 async function piToken(){
   const fail = why => { const e = new Error('개인 서버는 MAGI에 로그인해야 쓸 수 있습니다. ' + why + '  [014]'); e.code = '014'; return e; };
   if(!sb) throw fail('로그인 서버에 연결되어 있지 않습니다.');
@@ -2935,6 +2971,7 @@ function setProvider(p, opts){
   apiKeyInput.placeholder = cfg.keyPlaceholder;
   apiKeyInput.value = state.keys[p] || '';
   keyHint.textContent = cfg.keyHint;
+  piPowerRow.style.display = (p === 'pi') ? '' : 'none';
   modelHint.textContent = cfg.modelHint;
   keyCheckResult.textContent = '';
   modelListResult.textContent = '';
@@ -4382,6 +4419,7 @@ function init(){
     toggleKeyVis.textContent = isPw ? '숨기기' : '표시';
   });
   verifyKeyBtn.addEventListener('click', verifyApiKey);
+  piPowerBtn.addEventListener('click', powerOffPersonalServer);
   fetchModelsBtn.addEventListener('click', async ()=>{ await loadModelList(); openModelDrop(); });
   checkModelsBtn.addEventListener('click', checkAllModels);
   codeRefToggle.addEventListener('click', ()=>{

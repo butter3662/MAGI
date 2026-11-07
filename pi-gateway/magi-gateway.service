@@ -10,6 +10,9 @@ EnvironmentFile=/etc/magi-gateway.env
 ExecStart=/usr/bin/node /opt/magi-gateway/gateway.mjs
 Restart=always
 RestartSec=5
+# 원격 종료 요청 파일을 둘 곳 (/run/magi-gateway). 문지기가 쓸 수 있는 유일한 경로다.
+RuntimeDirectory=magi-gateway
+RuntimeDirectoryMode=0755
 
 # 이 프로그램은 파일을 쓸 일이 없으므로 시스템을 최대한 잠근다.
 NoNewPrivileges=true
