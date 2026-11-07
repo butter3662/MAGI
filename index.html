@@ -941,7 +941,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.1</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.2</span></footer>
 </div>
 
 <script>
@@ -2195,13 +2195,15 @@ async function piToken(){
 async function callPi(addr, model, sys, user, temperature, maxTokens, atts, opts){
   const headers = baseHeaders();
   headers['Authorization'] = 'Bearer ' + await piToken();
-  // auto routing may land on a reasoning model, so leave room for thinking.
+  // auto routing often lands on a reasoning model (GPT-OSS, Nemotron, DeepSeek...)
+  // that can spend thousands of tokens thinking before it writes the answer;
+  // too little room and the reply is cut off mid-thought ([011]).
   const thinks = isReasoningModel(model) || /^auto(:|$)/.test(model);
   const body = {
     model: model,
     messages:[{role:'system',content:sys},{role:'user',content:openAIContent(user, atts)}],
     temperature: temperature,
-    max_tokens: thinks ? maxTokens + 3000 : maxTokens
+    max_tokens: thinks ? maxTokens + 8000 : maxTokens
   };
   const data = await httpJSON(piBase(addr) + '/v1/chat/completions',
     { method:'POST', headers: headers, body: JSON.stringify(body) }, PROVIDERS.pi.label, opts && opts.deadline);
@@ -2209,7 +2211,13 @@ async function callPi(addr, model, sys, user, temperature, maxTokens, atts, opts
     const m = String((data.error.message || data.error) || '');
     const e = new Error(PROVIDERS.pi.label + ' — ' + m + '  [012]'); e.code = '012'; throw e;
   }
-  return extractAnyText(data, false);
+  return stripThinking(extractAnyText(data, false));
+}
+// Some open models put their thinking inside the answer as <think>...</think>.
+function stripThinking(text){
+  const t = String(text || '');
+  const out = t.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^[\s\S]*?<\/think>/i, '').trim();
+  return out || t;
 }
 
 /* --- OpenAI --- */
@@ -3814,7 +3822,9 @@ async function callChecked(cfg, sys, user, temp, maxTok, requiredKeys, atts, opt
   if(!prob) return r;
   const dumpErr = ()=>{ const e = new Error('모델이 한국어 답 대신 사고 과정만 출력했습니다.  [011]'); e.code = '011'; return e; };
   // callAndParse already retried an unparseable reply once; don't spend two more calls.
-  if(prob === 'notkorean' && !r.parsed) throw dumpErr();
+  // Except on the personal server: its auto routing may pick a different model
+  // on the next call, so one more try is often enough.
+  if(prob === 'notkorean' && !r.parsed && cfg.provider !== 'pi') throw dumpErr();
   if(timeLeft(opts) < 60000) { if(prob === 'chinese') return r; throw dumpErr(); }
   let r2 = null;
   try{ r2 = await callAndParse(cfg.provider, keyFor(cfg.provider), cfg.model, sys, user + LANG_RETRY_NOTE, temp, maxTok, requiredKeys, atts, opts); }
