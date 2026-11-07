@@ -941,7 +941,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.2</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.3</span></footer>
 </div>
 
 <script>
@@ -974,8 +974,8 @@ const SOLVE_BASE_2 = "당신은 MAGI 시스템의 연산 노드 '{NAME}'입니�
 const SOLVE_SUPREME_ADDENDUM = "\n\n[문제 풀이 모드] 세 노드의 역할 구분(논리·감성·전제)은 무시하십시오. 다수가 같은 답을 냈다는 이유만으로 그 답을 신뢰하지 마십시오. 세 풀이의 계산 과정을 직접 검산하여 실제로 어느 답이 맞는지 판단한 뒤 최종 답을 결정하고, 계산에 오류가 있었다면 반드시 지적하십시오.";
 const SOLVE_ROLE_LABEL = '문제 풀이';
 
-const JSON_ONLY_1 = '반드시 아래 JSON 형식으로만 답하십시오. 그 외의 설명, 인사, 마크다운 코드블록(```)은 절대 포함하지 마십시오.\n{"answer": "질문에 대한 당신의 결론 (2~4문장)", "reasoning": "판단 근거 (3~5문장)", "confidence": 0에서 100 사이의 정수}';
-const JSON_ONLY_2 = '반드시 아래 JSON 형식으로만 답하십시오. 그 외의 설명, 인사, 마크다운 코드블록(```)은 절대 포함하지 마십시오.\n{"critiques": {"상대노드키": {"agree": "그 노드의 결론에서 동의하는 부분 (1~2문장)", "disagree": "그 노드의 결론에서 비판하는 부분 (1~2문장)"}}, "answer": "비판을 반영해 보완한 최종 답변 (2~4문장)", "reasoning": "판단 근거 (3~5문장)", "confidence": 0에서 100 사이의 정수}\n\ncritiques에는 당신을 제외한 나머지 두 노드를 각각 하나씩, 반드시 두 개 모두 넣으십시오. 키는 melchior, balthasar, casper 중 해당하는 것을 그대로 사용합니다. 각 노드마다 동의하는 점과 비판하는 점을 분리해서 적으십시오. 동의할 부분이 없으면 agree를 빈 문자열로 두고, 비판할 부분이 없으면 disagree를 빈 문자열로 두십시오.';
+const JSON_ONLY_1 = '반드시 아래 JSON 형식으로만 답하십시오. 그 외의 설명, 인사, 마크다운 코드블록(```)은 절대 포함하지 마십시오.\n{"answer": "질문에 대한 당신의 결론 (2~4문장)", "reasoning": "판단 근거 (3~5문장)", "confidence": 0에서 100 사이의 정수}\n\n[confidence 기준] confidence는 당신의 answer가 옳다고 확신하는 정도(0~100)입니다. 질문의 중요도, 다른 노드와 같은 답인지 여부, 답변 문장의 단정적인 정도와는 상관없이, 오직 당신 답이 맞을 가능성에 대한 판단만 숫자로 나타내십시오.\n- 95~100: 모든 단계를 직접 확인했고 틀릴 여지가 사실상 없음\n- 80~94: 근거가 충분하지만 확인하지 못한 가정이나 계산이 조금 남아 있음\n- 50~79: 그럴듯하지만 다른 답일 가능성도 상당함\n- 50 미만: 추측에 가까움. 보기가 k개인 문제를 찍는 수준이라면 100/k 근처\n정보가 부족하거나 질문이 모호하면 그만큼 낮추십시오. 습관적으로 90 이상을 주지 마십시오.';
+const JSON_ONLY_2 = '반드시 아래 JSON 형식으로만 답하십시오. 그 외의 설명, 인사, 마크다운 코드블록(```)은 절대 포함하지 마십시오.\n{"critiques": {"상대노드키": {"agree": "그 노드의 결론에서 동의하는 부분 (1~2문장)", "disagree": "그 노드의 결론에서 비판하는 부분 (1~2문장)"}}, "answer": "비판을 반영해 보완한 최종 답변 (2~4문장)", "reasoning": "판단 근거 (3~5문장)", "confidence": 0에서 100 사이의 정수}\n\ncritiques에는 당신을 제외한 나머지 두 노드를 각각 하나씩, 반드시 두 개 모두 넣으십시오. 키는 melchior, balthasar, casper 중 해당하는 것을 그대로 사용합니다. 각 노드마다 동의하는 점과 비판하는 점을 분리해서 적으십시오. 동의할 부분이 없으면 agree를 빈 문자열로 두고, 비판할 부분이 없으면 disagree를 빈 문자열로 두십시오.\n\n[confidence 기준] confidence는 당신의 answer가 옳다고 확신하는 정도(0~100)입니다. 질문의 중요도, 다른 노드와 같은 답인지 여부, 답변 문장의 단정적인 정도와는 상관없이, 오직 당신 답이 맞을 가능성에 대한 판단만 숫자로 나타내십시오.\n- 95~100: 모든 단계를 직접 확인했고 틀릴 여지가 사실상 없음\n- 80~94: 근거가 충분하지만 확인하지 못한 가정이나 계산이 조금 남아 있음\n- 50~79: 그럴듯하지만 다른 답일 가능성도 상당함\n- 50 미만: 추측에 가까움. 보기가 k개인 문제를 찍는 수준이라면 100/k 근처\n정보가 부족하거나 질문이 모호하면 그만큼 낮추십시오. 습관적으로 90 이상을 주지 마십시오.\n2차의 confidence는 비판을 검토한 뒤의 확신입니다. 다른 노드가 당신 답의 오류를 지적했는데 반박하지 못했다면 낮추고, 독립적으로 다시 검토해 확인했다면 올리십시오.';
 
 const NODES = {
   melchior: {
@@ -1781,8 +1781,9 @@ function sysFor(nodeKey, phase){
   return t;
 }
 const MATH_REMINDER = "\n\n[수식 규칙 — 반드시 지킬 것] final_answer와 reasoning 안의 모든 수식·기호는 LaTeX로 쓰고 $...$ 로 감싸십시오. sec^3 x 같은 일반 텍스트 수식은 금지합니다. JSON 문자열이므로 수식의 백슬래시만 두 번 쓰고 줄바꿈 기호는 두 번 쓰지 마십시오 (예: $\\int \\sec^3 x\\,dx$).";
+const SUPREME_CONF_RULE = "\n\n[confidence 기준] 당신의 confidence는 final_answer가 옳다고 MAGI가 확신하는 정도(0~100)입니다. 노드 신뢰도의 평균이 아닙니다. 노드들이 같은 답을 냈더라도 같은 오류를 공유했을 수 있으니, 근거를 직접 검토한 결과로 정하십시오. 노드 신뢰도는 각 노드가 자기 답을 얼마나 확신하는지일 뿐이므로, 참고하되 그대로 따르지 마십시오. 95 이상은 결론을 직접 확인해 틀릴 여지가 사실상 없을 때만 주십시오.";
 function sysForSupreme(){
-  return (isSolve() ? (SUPREME_SYSTEM + SOLVE_SUPREME_ADDENDUM) : SUPREME_SYSTEM) + MATH_REMINDER;
+  return (isSolve() ? (SUPREME_SYSTEM + SOLVE_SUPREME_ADDENDUM) : SUPREME_SYSTEM) + SUPREME_CONF_RULE + MATH_REMINDER;
 }
 // Creative temperatures make no sense once every node is doing formal analysis.
 function tempFor(nodeKey){
