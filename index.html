@@ -875,7 +875,7 @@
       <span id="stopLabel">연산 중지</span>
       <span class="submit-sub" id="stopSub">STOP MAGI</span>
     </button>
-    <div class="status-line"><span class="status-dot" id="statusDot"></span><span id="statusText">대기 중 — API 키를 설정하고 질의를 입력하세요</span></div>
+    <div class="status-line"><span class="status-dot" id="statusDot"></span><span id="statusText">대기 중 — 질의를 입력하세요</span></div>
     <div class="error-banner" id="errorBanner"></div>
   </div>
 
@@ -991,7 +991,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.12</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.13</span></footer>
 </div>
 
 <script>
@@ -2764,7 +2764,8 @@ async function loadModelList(){
   // Fetch the active provider plus any other provider that already has a key,
   // so per-node dropdowns for other companies fill in too.
   const targets = [active];
-  PROVIDER_ORDER.forEach(p=>{
+  // Personal-server-only: don't fetch lists for companies that are hidden.
+  if(!PI_ONLY) PROVIDER_ORDER.forEach(p=>{
     if(p === active) return;
     if(p === 'openrouter' || sanitizeKey(state.keys[p]||'')) targets.push(p);
   });
@@ -3123,9 +3124,9 @@ function setProvider(p, opts){
   modelHint.textContent = cfg.modelHint;
   keyCheckResult.textContent = '';
   modelListResult.textContent = '';
-  attachNote.textContent = (p==='claude' || p==='gemini')
+  attachNote.textContent = (p==='claude' || p==='gemini' || (p==='pi' && canConvert()))
     ? '이미지 · 텍스트 · PDF'
-    : '이미지 · 텍스트 (PDF는 Claude/Gemini만)';
+    : (p==='pi' ? '이미지 · 텍스트' : '이미지 · 텍스트 (PDF는 Claude/Gemini만)');
   availShared.textContent = ''; availShared.className = 'avail';
   if(!opts.initial) scheduleCheck(null, 0);
   refreshPersonalServerUI();
@@ -3701,6 +3702,7 @@ async function failoverCandidates(base, code, atts, tried){
   // server-side failure (network, login, 5xx) hits its other models the same way.
   const skipPersonal = base.provider === 'pi' && (/^auto(:|$)/.test(base.model) || ['002','007','014'].indexOf(code) !== -1);
   for(const p of Object.keys(PROVIDERS)){
+    if(PI_ONLY && p !== 'pi') continue;
     const key = keyFor(p);
     if(!key) continue;
     if(p === 'pi' && skipPersonal) continue;
@@ -4740,7 +4742,7 @@ function init(){
 
   state.codeNum = Math.floor(Math.random()*800)+100;
   codeNumEl.textContent = state.codeNum;
-  setStatus('', '대기 중 — API 키를 설정하고 질의를 입력하세요');
+  setStatus('', '대기 중 — 질의를 입력하세요');
   populateProviderSelects();
   setProvider(PI_ONLY ? 'pi' : 'openrouter', { initial:true });
   renderAllNodeModelOptions();
