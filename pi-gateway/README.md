@@ -418,7 +418,31 @@ sudo systemctl enable --now magi-poweroff.path
 sudo systemctl restart magi-gateway
 ```
 
+## 원격 재시작 (MAGI의 '재시작' 버튼)
+
+끄기와 같은 방식이다. 문지기는 `/run/magi-gateway/reboot` 파일만 만들고, root 권한의 `magi-reboot.path`가 그 파일을 보고 파이를 재시작한다. 로그인 + 허용 계정 확인을 통과해야만 작동한다.
+설치는 아래 '업데이트'의 `update.sh`가 함께 해 준다.
+
+## 보안 업데이트 자동 설치 (한 번만)
+
+```bash
+sudo bash ~/MAGI/pi-gateway/setup-auto-update.sh
+```
+
+Debian 표준 도구(unattended-upgrades)로 **보안 업데이트만** 매일 자동 설치한다. 자동 재시작은 하지 않는다.
+커널처럼 재시작해야 적용되는 업데이트는 한 달에 한 번쯤 `sudo apt update && sudo apt full-upgrade`를 한 뒤 MAGI의 '재시작' 버튼으로 적용한다.
+Docker 안의 FreeLLMAPI는 여기에 포함되지 않는다.
+
 ## 업데이트
+
+문지기만 바꿀 때는 이 두 줄이면 된다 (원격 끄기·재시작 장치도 함께 설치·갱신된다):
+
+```bash
+cd ~/MAGI && git pull
+sudo bash pi-gateway/update.sh
+```
+
+아래는 같은 일을 손으로 하는 방법이다.
 
 FreeLLMAPI:
 

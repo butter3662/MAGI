@@ -1,0 +1,7 @@
+[Unit]
+Description=MAGI 개인 서버 원격 재시작
+
+[Service]
+Type=oneshot
+ExecStart=/bin/rm -f /run/magi-gateway/reboot
+ExecStart=/usr/bin/systemctl reboot

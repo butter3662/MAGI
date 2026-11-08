@@ -343,7 +343,7 @@
   #piStatusRow, #piPowerRow{align-items:center; gap:10px;}
   #piStatusRow{margin-top:12px;}
   #piPowerRow{margin-top:10px;}
-  #piPowerBtn{height:34px; width:104px; padding:0 6px; align-self:center;}
+  #piPowerBtn, #piRebootBtn{height:34px; width:104px; padding:0 6px; align-self:center; flex-shrink:0;}
   #piStatusRow .pi-status{font-size:11px; line-height:1.6;}
   #piStatusRow .hint, #piPowerRow .hint{margin-top:0;}
   .pi-status b{font-weight:400;}
@@ -903,6 +903,7 @@
       <span class="hint pi-status" id="piStatus"></span>
     </div>
     <div class="keyrow" id="piPowerRow" style="display:none">
+      <button class="iconbtn" id="piRebootBtn" type="button">재시작</button>
       <button class="iconbtn" id="piPowerBtn" type="button">개인 서버 끄기</button>
       <span class="hint" id="piPowerResult"></span>
     </div>
@@ -991,7 +992,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.14</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.15</span></footer>
 </div>
 
 <script>
@@ -1159,7 +1160,7 @@ const toggleKeyVis = $('toggleKeyVis');
 const verifyKeyBtn = $('verifyKeyBtn');
 const piPowerRow = $('piPowerRow');
 const piStatusRow = $('piStatusRow'), piStatusEl = $('piStatus');
-const piPowerBtn = $('piPowerBtn');
+const piPowerBtn = $('piPowerBtn'), piRebootBtn = $('piRebootBtn');
 const piPowerResult = $('piPowerResult');
 const keyCheckResult = $('keyCheckResult');
 const modelShared = $('modelShared');
@@ -2226,10 +2227,43 @@ function piBase(addr){
   if(s && !/^https?:\/\//i.test(s)) s = 'https://' + s;
   return s.replace(/\/v1$/,'');
 }
-const PI_POWER_HINT = '파이를 안전하게 끕니다. 초록 불이 멈춘 뒤 전원을 뽑으세요.';
+const PI_POWER_HINT = '재시작: 1~2분 뒤 자동으로 다시 켜집니다. 끄기: 초록 불이 멈춘 뒤 전원을 뽑으세요.';
 function resetPiPowerResult(){
   piPowerResult.textContent = PI_POWER_HINT;
   piPowerResult.style.color = '';
+}
+
+/* Restart the Pi through the gateway (same login + allowlist as chat). */
+async function rebootPersonalServer(){
+  const addr = keyFor('pi');
+  if(!addr){ piPowerResult.textContent = '✗ 개인 서버 주소를 먼저 넣으세요.'; piPowerResult.style.color = 'var(--red)'; return; }
+  if(state.busy){ piPowerResult.textContent = '✗ 심의가 끝난 뒤에 재시작하세요.'; piPowerResult.style.color = 'var(--red)'; return; }
+  if(!window.confirm('개인 서버(라즈베리파이)를 재시작할까요?\n1~2분 동안 MAGI를 쓸 수 없고, 그 뒤 자동으로 다시 켜집니다.')) return;
+  piRebootBtn.disabled = true;
+  piPowerResult.style.color = '';
+  piPowerResult.textContent = '재시작 명령을 보내는 중...';
+  try{
+    const res = await fetch(piBase(addr) + '/admin/reboot', {
+      method:'POST', headers:{ 'Authorization':'Bearer ' + await piToken() }
+    });
+    let msg = 'HTTP ' + res.status;
+    try{ const j = await res.json(); msg = (j.error && j.error.message) || j.message || msg; }catch(e){}
+    if(res.ok){
+      piPowerResult.textContent = '✓ 재시작 중입니다. 1~2분 뒤 위 상태 줄의 가동 시간이 0분부터 다시 시작되면 끝난 겁니다.';
+      piPowerResult.style.color = 'var(--green-core)';
+    } else if(res.status === 404){
+      piPowerResult.textContent = '✗ 문지기가 이전 버전입니다. 파이에서 재시작 기능을 설치하세요.';
+      piPowerResult.style.color = 'var(--amber)';
+    } else {
+      piPowerResult.textContent = '✗ ' + msg;
+      piPowerResult.style.color = 'var(--red)';
+    }
+  }catch(e){
+    piPowerResult.textContent = '✗ ' + (e.code === '014' ? e.message.replace(/\s*\[\d+\]$/,'') : networkErrorMessage(PROVIDERS.pi.label));
+    piPowerResult.style.color = 'var(--red)';
+  }finally{
+    piRebootBtn.disabled = false;
+  }
 }
 
 /* Shut the Pi down through the gateway (same login + allowlist as chat). */
@@ -4761,6 +4795,7 @@ function init(){
   });
   verifyKeyBtn.addEventListener('click', verifyApiKey);
   piPowerBtn.addEventListener('click', powerOffPersonalServer);
+  piRebootBtn.addEventListener('click', rebootPersonalServer);
   // Live status: poll every 3 s while the personal-server settings are on screen,
   // backing off to 10 s after a failure (server off, offline) so errors don't spam.
   (function livePiStatus(){
@@ -4789,7 +4824,7 @@ function init(){
   // (키 확인, 목록, 전체확인, tabs...) or editing the address puts the hint back.
   settingsBody.addEventListener('click', e=>{
     const b = e.target.closest('button');
-    if(b && b !== piPowerBtn) resetPiPowerResult();
+    if(b && b !== piPowerBtn && b !== piRebootBtn) resetPiPowerResult();
   });
   apiKeyInput.addEventListener('input', resetPiPowerResult);
   // 목록 toggles the list: first tap opens it (and refreshes), second tap closes it.

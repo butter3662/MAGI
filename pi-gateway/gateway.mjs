@@ -34,6 +34,8 @@ const TOKEN_CACHE_MS = 60 * 1000;
 // 원격 종료: 문지기는 권한이 없으므로 이 파일만 만들고,
 // root 권한의 magi-poweroff.path가 파일을 보고 파이를 끈다.
 const POWEROFF_FLAG = env.POWEROFF_FLAG || '/run/magi-gateway/poweroff';
+// 재시작도 같은 방식: 문지기는 파일만 만들고, root 권한의 magi-reboot.path가 파이를 재시작한다.
+const REBOOT_FLAG = env.REBOOT_FLAG || '/run/magi-gateway/reboot';
 
 function list(v){ return String(v || '').split(',').map(s => s.trim()).filter(Boolean); }
 
@@ -223,7 +225,8 @@ const server = http.createServer(async (req, res) => {
   const isModels = req.method === 'GET' && path === '/v1/models';
   const isPoweroff = req.method === 'POST' && path === '/admin/poweroff';
   const isStatus = req.method === 'GET' && path === '/admin/status';
-  if(!isChat && !isModels && !isPoweroff && !isStatus) return fail(res, 404, '없는 주소입니다.');
+  const isReboot = req.method === 'POST' && path === '/admin/reboot';
+  if(!isChat && !isModels && !isPoweroff && !isStatus && !isReboot) return fail(res, 404, '없는 주소입니다.');
 
   // 1) 로그인 확인
   const auth = req.headers.authorization || '';
@@ -261,6 +264,19 @@ const server = http.createServer(async (req, res) => {
     console.warn('[gateway] 원격 종료 요청 (id=' + who.uid + ')');
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ ok: true, message: '종료 명령을 보냈습니다.' }));
+  }
+
+  // 원격 재시작 (로그인 + 허용 계정 확인을 통과한 경우에만)
+  if(isReboot){
+    try{
+      fs.writeFileSync(REBOOT_FLAG, new Date().toISOString() + ' ' + who.uid + '\n');
+    }catch(e){
+      console.error('[gateway] 재시작 요청 기록 실패:', e.message);
+      return fail(res, 500, '재시작 기능이 설치되어 있지 않습니다. 설치 안내의 "원격 재시작" 단계를 확인하세요.');
+    }
+    console.warn('[gateway] 원격 재시작 요청 (id=' + who.uid + ')');
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ ok: true, message: '재시작 명령을 보냈습니다.' }));
   }
 
   // 3) 넘기기
