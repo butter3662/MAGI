@@ -991,7 +991,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.13</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.14</span></footer>
 </div>
 
 <script>
@@ -3082,7 +3082,7 @@ async function checkAllModels(){
 }
 
 function buildCodeRef(){
-  codeList.innerHTML = Object.keys(ERROR_CODES).map(k=>
+  codeList.innerHTML = Object.keys(ERROR_CODES).sort().map(k=>
     '<button class="code-chip sev-' + ERROR_CODES[k].c + '" data-code="' + k + '">' + k + '</button>'
   ).join('');
   Array.prototype.forEach.call(codeList.querySelectorAll('.code-chip'), btn=>{
