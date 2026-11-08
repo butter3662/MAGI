@@ -838,7 +838,7 @@
   <!-- ================= SETTINGS ================= -->
   <button class="settings-toggle" id="settingsToggle">⚙ 설정 (API 키 / 모델) — 펼치기</button>
   <div class="panel settings-body" id="settingsBody">
-    <label>AI 제공사</label>
+    <label id="providerTabsLabel">AI 제공사</label>
     <div class="provider-tabs" id="providerTabs">
       <button class="ptab" data-provider="openrouter">OpenRouter</button>
       <button class="ptab" data-provider="gemini">Gemini</button>
@@ -896,7 +896,7 @@
     </label>
 
     <div class="adv-models" id="advModels">
-      <div class="hint" style="margin:0 0 8px;">노드마다 다른 회사를 고를 수 있습니다. 고른 회사의 API 키는 위 탭에서 각각 입력해 두세요.</div>
+      <div class="hint" id="advModelsHint" style="margin:0 0 8px;">노드마다 다른 회사를 고를 수 있습니다. 고른 회사의 API 키는 위 탭에서 각각 입력해 두세요.</div>
 
       <div class="node-cfg">
         <label>MELCHIOR-1 · 이론 · 논리</label>
@@ -948,7 +948,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.6</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.7</span></footer>
 </div>
 
 <script>
@@ -1066,6 +1066,13 @@ const PROVIDER_ORDER = ['openrouter','gemini','claude','gpt','pi'];
 --------------------------------------------------------------------- */
 const $ = (id) => document.getElementById(id);
 const providerTabs = $('providerTabs');
+// Everything runs on the personal server now: provider tabs and per-node
+// provider choices are hidden. Set to false to bring them back.
+const PI_ONLY = true;
+if(PI_ONLY){
+  providerTabs.style.display = 'none';
+  $('providerTabsLabel').style.display = 'none';
+}
 const keyLabel = $('keyLabel');
 const keyHint = $('keyHint');
 const modelHint = $('modelHint');
@@ -1565,7 +1572,7 @@ function applySettingsToForm(obj){
   // Migrate a key saved before provider support existed.
   if(obj.apiKey && !state.keys.openrouter) state.keys.openrouter = obj.apiKey;
 
-  setProvider(obj.provider || 'openrouter', { initial:true });
+  setProvider(PI_ONLY ? 'pi' : (obj.provider || 'openrouter'), { initial:true });
   if(obj.modelShared) modelShared.value = obj.modelShared;
 
   diffModelToggle.checked = !!obj.diffModel;
@@ -1808,7 +1815,7 @@ function refreshNodeRoles(){
 }
 
 function nodeConfig(slot){
-  const sharedProvider = state.provider;
+  const sharedProvider = PI_ONLY ? 'pi' : state.provider;
   const sharedModel = modelShared.value.trim() || PROVIDERS[sharedProvider].defaultModel;
   if(!diffModelToggle.checked) return { provider:sharedProvider, model:sharedModel };
 
@@ -1938,6 +1945,17 @@ function renderNodeModelOptions(slot){
 function renderAllNodeModelOptions(){ SLOTS.forEach(renderNodeModelOptions); }
 
 function populateProviderSelects(){
+  if(PI_ONLY){
+    $('advModelsHint').textContent = '노드마다 다른 모델을 고를 수 있습니다 (모두 개인 서버).';
+    SLOTS.forEach(slot=>{
+      const el = provField(slot);
+      if(!el) return;
+      el.innerHTML = '<option value="">공용 설정 따름</option>';
+      el.value = '';
+      el.closest('.cfg-row').style.display = 'none';
+    });
+    return;
+  }
   const opts = '<option value="">공용 설정 따름</option>' +
     PROVIDER_ORDER.map(p=>'<option value="'+p+'">'+PROVIDERS[p].label+'</option>').join('');
   SLOTS.forEach(slot=>{
@@ -4495,7 +4513,7 @@ function init(){
   codeNumEl.textContent = state.codeNum;
   setStatus('', '대기 중 — API 키를 설정하고 질의를 입력하세요');
   populateProviderSelects();
-  setProvider('openrouter', { initial:true });
+  setProvider(PI_ONLY ? 'pi' : 'openrouter', { initial:true });
   renderAllNodeModelOptions();
   refreshNodeRoles();
   showEnvBannerIfNeeded();
