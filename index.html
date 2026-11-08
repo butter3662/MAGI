@@ -31,6 +31,8 @@
 
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
+  /* Korean wraps between words (어절), not mid-word; very long tokens like model IDs may still break. */
+  html{word-break:keep-all; overflow-wrap:anywhere;}
   body{
     background:
       radial-gradient(ellipse at 50% 0%, rgba(61,255,198,0.06), transparent 60%),
@@ -345,6 +347,7 @@
   #piStatusRow .pi-status{font-size:11px; line-height:1.6;}
   #piStatusRow .hint, #piPowerRow .hint{margin-top:0;}
   .pi-status b{font-weight:400;}
+  .pi-status .seg{white-space:nowrap;}
   .pi-status .live-dot{color:var(--green-core); font-size:8px; vertical-align:middle; animation:liveBlink 1.6s ease-in-out infinite;}
   @keyframes liveBlink{0%,100%{opacity:1;} 50%{opacity:.25;}}
   .pi-status .t-ok{color:var(--green-core);} .pi-status .t-warm{color:var(--amber);} .pi-status .t-hot{color:var(--red);}
@@ -502,10 +505,29 @@
   .sess-item .sess-del{opacity:.55;}
   .sess-open{flex:1; min-width:0; display:flex; justify-content:space-between; gap:8px; text-align:left;
     background:transparent; border:1px solid transparent; color:var(--text-main);
-    font-family:var(--font-mono); font-size:11.5px; padding:8px; border-radius:2px; cursor:pointer;}
+    font-family:var(--font-mono); font-size:11.5px; padding:7px 8px; border-radius:2px; cursor:pointer;}
   .sess-title{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .sess-when{flex-shrink:0; color:var(--text-dim); font-size:10px;}
   .sess-del{background:transparent; border:1px solid var(--red-dim); color:var(--red); font-size:10px; padding:0 8px; border-radius:2px; cursor:pointer;}
+  .sess-search{width:100%; box-sizing:border-box; margin:2px 0 8px; padding:8px 10px; font-size:12px;
+    background:#020a06; border:1px solid var(--green-dim); color:var(--text-main); border-radius:2px; font-family:var(--font-mono);}
+  .sess-search:focus{outline:none; border-color:var(--green-core);}
+  .sess-more{flex-shrink:0; width:34px; background:transparent; border:1px solid transparent; border-radius:2px;
+    color:var(--text-dim); font-size:15px; letter-spacing:1px; cursor:pointer; line-height:1;}
+  .sess-more:hover, .sess-more.on{border-color:var(--green-dim); color:var(--green-core);}
+  .sess-menu{position:absolute; z-index:5; min-width:160px; background:#041009; border:1px solid var(--green-core);
+    box-shadow:0 8px 24px rgba(0,0,0,.65); border-radius:2px; padding:4px 0;}
+  .sess-menu[hidden]{display:none;}
+  .sess-menu button{display:block; width:100%; text-align:left; background:transparent; border:none; cursor:pointer;
+    color:var(--text-main); padding:10px 12px; font-family:var(--font-mono); font-size:12px;}
+  .sess-menu button:hover{background:#03140c;}
+  .sess-menu button.danger{color:var(--red);}
+  .sess-menu .rename{display:flex; flex-direction:column; gap:6px; padding:8px;}
+  .sess-menu .rename input{padding:7px 8px; font-size:12px; background:#020a06; border:1px solid var(--green-dim);
+    color:var(--text-main); border-radius:2px; font-family:var(--font-mono);}
+  .sess-menu .rename .row{display:flex; gap:6px;}
+  .sess-menu .rename .row button{flex:1; text-align:center; border:1px solid var(--green-dim); padding:7px;}
+  .sess-empty{padding:8px 2px; font-size:11px; color:var(--text-dim);}
   .sb-config{margin-top:10px; font-size:11px; color:var(--text-dim);}
   .sb-config summary{cursor:pointer;}
 
@@ -718,7 +740,9 @@
     <div id="acctUserBox" hidden>
       <div class="acct-user-row"><span>로그인됨: <b id="acctEmailLabel"></b></span><button class="linkbtn" id="acctSignOutBtn">로그아웃</button></div>
       <label>최근 대화</label>
+      <input type="search" id="sessSearch" class="sess-search" placeholder="대화 검색" autocomplete="off">
       <div class="sess-list" id="sessionList"></div>
+      <div class="sess-menu" id="sessMenu" hidden></div>
     </div>
     <div class="key-check-result" id="acctStatus"></div>
     <details class="sb-config" id="sbConfigBox">
@@ -956,7 +980,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.9</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.10</span></footer>
 </div>
 
 <script>
@@ -1891,6 +1915,16 @@ function renderSharedModelOptions(){
 function updateModelCurrent(){
   const id = modelShared.value.trim() || PROVIDERS[state.provider].defaultModel;
   modelCurrent.innerHTML = '선택된 모델: <b>' + escapeHtml(id) + '</b>' + (isFreeModel(id) ? '<span class="fr">무료</span>' : '');
+  refreshFailoverVisibility();
+}
+// auto:smart / auto:fast already fall back inside FreeLLMAPI, so MAGI's own
+// failover adds nothing there: hide the option when every node uses auto.
+function isAutoModel(m){ return /^auto(:|$)/i.test(String(m || '').trim()); }
+function allNodesAuto(){ return SLOTS.every(slot=>isAutoModel(nodeConfig(slot).model)); }
+function refreshFailoverVisibility(){
+  if(typeof failoverToggle === 'undefined' || !failoverToggle) return;
+  const line = failoverToggle.closest('label');
+  if(line) line.style.display = allNodesAuto() ? 'none' : '';
 }
 const MODEL_DROP_MAX = 300;
 function renderModelDrop(){
@@ -2246,11 +2280,14 @@ async function fetchPiStatus(quiet){
     const t = j.cpuTempC;
     const cls = t == null ? '' : (t >= 80 ? 't-hot' : t >= 70 ? 't-warm' : 't-ok');
     piStatusEl.style.color = '';
-    piStatusEl.innerHTML =
-      'CPU 온도 <b class="' + cls + '">' + (t == null ? '알 수 없음' : t.toFixed(1) + '℃') + '</b>' +
-      ' · 부하 ' + (j.load1 != null ? j.load1 : '-') + (j.cpus ? '/' + j.cpus + '코어' : '') +
-      ' · 메모리 ' + (j.memUsedPct != null ? j.memUsedPct + '%' : '-') +
-      ' · 가동 ' + (j.uptimeSec != null ? fmtUptime(j.uptimeSec) : '-') +
+    const segs = [
+      'CPU 온도 <b class="' + cls + '">' + (t == null ? '알 수 없음' : t.toFixed(1) + '℃') + '</b>',
+      j.cpuUsagePct != null ? 'CPU 사용률 ' + Math.round(j.cpuUsagePct) + '%'
+                            : '부하 ' + (j.load1 != null ? j.load1 : '-') + (j.cpus ? '/' + j.cpus + '코어' : ''),
+      '메모리 ' + (j.memUsedPct != null ? j.memUsedPct + '%' : '-'),
+      '가동 ' + (j.uptimeSec != null ? fmtUptime(j.uptimeSec).trim() : '-')
+    ];
+    piStatusEl.innerHTML = segs.map(x=>'<span class="seg">' + x + '</span>').join(' · ') +
       ' <span class="live-dot" title="3초마다 갱신">●</span>';
   }catch(e){
     piStatusEl.textContent = '✗ ' + (e.code === '014' ? e.message.replace(/\s*\[\d+\]$/,'') : networkErrorMessage(PROVIDERS.pi.label));
@@ -3588,6 +3625,8 @@ async function wipeForAccountChange(){
   state.failover = {};
   state.noVision = {};
   sessionList.innerHTML = '';
+  sessRows = [];
+  sessSearch.value = '';
   closeDrawer();
 }
 
@@ -3748,7 +3787,7 @@ async function callSlot(slot, phase, sys, user, temp, maxTok, requiredKeys, atts
   try{
     return await callOn(slot, cfg, sys, user, temp, maxTok, requiredKeys, atts, budget);
   }catch(err){
-    if(err.code === 'CANCELLED' || !failoverOn() || state.cancelled) throw err;
+    if(err.code === 'CANCELLED' || !failoverOn() || state.cancelled || isAutoModel(cfg.model)) throw err;
     const base = nodeConfig(slot);
     const tried = [base.provider + '|' + base.model, cfg.provider + '|' + cfg.model];
     let lastErr = err, found = false, lastPick = null;
@@ -4329,21 +4368,75 @@ async function saveCurrentSession(){
   if(error) acctMsg('대화 저장 실패: ' + error.message, 'var(--red)');
   else loadSessionList();
 }
+let sessRows = [];
 async function loadSessionList(){
   if(!sb || !sbUser) return;
   const { data, error } = await sb.from('magi_sessions')
-    .select('id,title,updated_at').order('updated_at', { ascending:false }).limit(50);
-  if(error){ sessionList.innerHTML = ''; return acctMsg('목록 불러오기 실패: ' + error.message, 'var(--red)'); }
-  if(!data.length){ sessionList.innerHTML = '<div class="hint">저장된 대화가 없습니다.</div>'; return; }
-  sessionList.innerHTML = data.map(r=>{
-    const d = new Date(r.updated_at);
-    const when = (d.getMonth()+1) + '/' + d.getDate() + ' ' +
-      String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
-    return '<div class="sess-item' + (r.id === state.sessionId ? ' on' : '') + '">' +
-      '<button class="sess-open" data-id="' + r.id + '"><span class="sess-title">' +
-      escapeHtml(r.title || '제목 없음') + '</span></button>' +
-      '<button class="sess-del" data-id="' + r.id + '">삭제</button></div>';
-  }).join('');
+    .select('id,title,updated_at').order('updated_at', { ascending:false }).limit(200);
+  if(error){ sessionList.innerHTML = ''; sessRows = []; return acctMsg('목록 불러오기 실패: ' + error.message, 'var(--red)'); }
+  sessRows = data || [];
+  renderSessionList();
+}
+function renderSessionList(){
+  closeSessMenu();
+  if(!sessRows.length){ sessionList.innerHTML = '<div class="sess-empty">저장된 대화가 없습니다.</div>'; return; }
+  const q = sessSearch.value.trim().toLowerCase().replace(/\s+/g, '');
+  const rows = q ? sessRows.filter(r=>String(r.title || '제목 없음').toLowerCase().replace(/\s+/g, '').indexOf(q) !== -1) : sessRows;
+  if(!rows.length){ sessionList.innerHTML = '<div class="sess-empty">"' + escapeHtml(sessSearch.value.trim()) + '"와 맞는 대화가 없습니다.</div>'; return; }
+  sessionList.innerHTML = rows.map(r=>
+    '<div class="sess-item' + (r.id === state.sessionId ? ' on' : '') + '">' +
+      '<button class="sess-open" data-id="' + r.id + '"><span class="sess-title">' + escapeHtml(r.title || '제목 없음') + '</span></button>' +
+      '<button class="sess-more" data-id="' + r.id + '" aria-label="더 보기">⋯</button>' +
+    '</div>'
+  ).join('');
+}
+/* Popup menu for one conversation: rename or delete. */
+let sessMenuFor = null;
+function closeSessMenu(){
+  sessMenu.hidden = true;
+  sessMenuFor = null;
+  Array.prototype.forEach.call(sessionList.querySelectorAll('.sess-more.on'), b=>b.classList.remove('on'));
+}
+function openSessMenu(btn){
+  const id = btn.getAttribute('data-id');
+  if(sessMenuFor === id){ closeSessMenu(); return; }
+  closeSessMenu();
+  sessMenuFor = id;
+  btn.classList.add('on');
+  sessMenu.innerHTML = '<button data-act="rename">이름 바꾸기</button><button data-act="delete" class="danger">삭제</button>';
+  sessMenu.hidden = false;
+  placeSessMenu(btn);
+}
+function placeSessMenu(btn){
+  const d = drawer.getBoundingClientRect(), b = btn.getBoundingClientRect();
+  const w = sessMenu.offsetWidth, h = sessMenu.offsetHeight;
+  let top = b.bottom - d.top + drawer.scrollTop + 4;
+  // Flip above the button when it would run off the bottom of the drawer.
+  if(b.bottom + h + 8 > d.bottom) top = b.top - d.top + drawer.scrollTop - h - 4;
+  sessMenu.style.top = Math.max(drawer.scrollTop + 4, top) + 'px';
+  sessMenu.style.left = Math.max(8, b.right - d.left - w) + 'px';
+}
+function showRenameForm(){
+  const row = sessRows.find(r=>r.id === sessMenuFor);
+  const btn = sessionList.querySelector('.sess-more[data-id="' + sessMenuFor + '"]');
+  sessMenu.innerHTML = '<div class="rename"><input type="text" maxlength="40" value="' + escapeHtml((row && row.title) || '') + '">' +
+    '<div class="row"><button data-act="cancel">취소</button><button data-act="save">저장</button></div></div>';
+  if(btn) placeSessMenu(btn);
+  const inp = sessMenu.querySelector('input');
+  inp.focus(); inp.select();
+  inp.addEventListener('keydown', e=>{ if(e.key === 'Enter') renameSession(); if(e.key === 'Escape') closeSessMenu(); });
+}
+async function renameSession(){
+  const id = sessMenuFor;
+  const inp = sessMenu.querySelector('.rename input');
+  const title = inp ? inp.value.replace(/\s+/g, ' ').trim().slice(0, 40) : '';
+  if(!id || !title) return closeSessMenu();
+  const { error } = await sb.from('magi_sessions').update({ title: title }).eq('id', id);
+  if(error){ acctMsg('이름 바꾸기 실패: ' + error.message, 'var(--red)'); return closeSessMenu(); }
+  const row = sessRows.find(r=>r.id === id);
+  if(row) row.title = title;
+  if(state.sessionId === id) state.title = title;
+  renderSessionList();
 }
 async function openSession(id){
   if(state.busy || !sb) return;
@@ -4357,7 +4450,7 @@ async function openSession(id){
   state.round = d.round || state.history.length;
   state.sessionId = id;
   state.convOwner = sbUser ? sbUser.id : null;
-  state.title = d.title || data.title || null;
+  state.title = data.title || d.title || null;
   closeDrawer();
   updateInputMode();
   renderMathIn(roundsContainer);
@@ -4370,9 +4463,11 @@ async function deleteSession(id){
   const { error } = await sb.from('magi_sessions').delete().eq('id', id);
   if(error) return acctMsg('삭제 실패: ' + error.message, 'var(--red)');
   if(state.sessionId === id) state.sessionId = null;
-  loadSessionList();
+  sessRows = sessRows.filter(r=>r.id !== id);
+  renderSessionList();
 }
 const drawer = $('drawer'), drawerScrim = $('drawerScrim');
+const sessSearch = $('sessSearch'), sessMenu = $('sessMenu');
 // iOS Safari scrolls the page under a fixed panel unless the page itself is pinned.
 let pageLockY = null;
 function lockPageScroll(){
@@ -4395,6 +4490,7 @@ function openDrawer(){
   if(sbUser) loadSessionList();
 }
 function closeDrawer(){
+  closeSessMenu();
   drawer.classList.remove('show'); drawerScrim.classList.remove('show');
   drawer.setAttribute('aria-hidden','true');
   unlockPageScroll();
@@ -4423,13 +4519,59 @@ function initAccount(){
   });
   sessionList.addEventListener('click', (e)=>{
     const openBtn = e.target.closest('.sess-open');
-    const delBtn = e.target.closest('.sess-del');
-    if(openBtn) openSession(openBtn.getAttribute('data-id'));
-    else if(delBtn){
-      const id = delBtn.getAttribute('data-id');
+    const moreBtn = e.target.closest('.sess-more');
+    if(moreBtn) openSessMenu(moreBtn);
+    else if(openBtn){ closeSessMenu(); openSession(openBtn.getAttribute('data-id')); }
+  });
+  sessMenu.addEventListener('click', (e)=>{
+    e.stopPropagation();   // the menu re-renders itself; don't let the drawer treat this as an outside tap
+    const b = e.target.closest('button[data-act]');
+    if(!b) return;
+    const act = b.getAttribute('data-act'), id = sessMenuFor;
+    if(act === 'rename') showRenameForm();
+    else if(act === 'save') renameSession();
+    else if(act === 'cancel') closeSessMenu();
+    else if(act === 'delete'){
+      closeSessMenu();
       showConfirmBanner('이 대화를 삭제할까요?', '※ 삭제한 대화는 복구할 수 없습니다', ()=>deleteSession(id));
     }
   });
+  sessSearch.addEventListener('input', renderSessionList);
+  // Swipe the records drawer to the right to close it (no need to hit ✕).
+  let sw = null;
+  drawer.addEventListener('touchstart', (e)=>{
+    if(e.touches.length !== 1 || e.target.closest('input, textarea')) { sw = null; return; }
+    const t = e.touches[0];
+    sw = { x:t.clientX, y:t.clientY, dx:0, dir:null, t0:Date.now() };
+  }, { passive:true });
+  drawer.addEventListener('touchmove', (e)=>{
+    if(!sw) return;
+    const t = e.touches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y;
+    if(sw.dir === null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)){
+      sw.dir = (dx > 0 && Math.abs(dx) > Math.abs(dy) * 1.2) ? 'h' : 'v';
+      if(sw.dir === 'h') closeSessMenu();
+    }
+    if(sw.dir !== 'h') return;
+    e.preventDefault();
+    sw.dx = Math.max(0, dx);
+    drawer.style.transition = 'none';
+    drawer.style.transform = 'translateX(' + sw.dx + 'px)';
+  }, { passive:false });
+  const endSwipe = ()=>{
+    if(!sw) return;
+    const g = sw; sw = null;
+    if(g.dir !== 'h') return;
+    drawer.style.transition = ''; drawer.style.transform = '';
+    const speed = g.dx / Math.max(1, Date.now() - g.t0);
+    if(g.dx > 80 || speed > 0.5) closeDrawer();
+  };
+  drawer.addEventListener('touchend', endSwipe);
+  drawer.addEventListener('touchcancel', endSwipe);
+  // A tap anywhere else in the drawer closes the popup; scrolling the list does too.
+  drawer.addEventListener('click', (e)=>{
+    if(!sessMenu.hidden && !sessMenu.contains(e.target) && !e.target.closest('.sess-more')) closeSessMenu();
+  });
+  drawer.addEventListener('scroll', ()=>{ if(!sessMenu.hidden && !sessMenu.querySelector('.rename')) closeSessMenu(); });
   initGate();
   connectSupabase();
 }
@@ -4587,7 +4729,9 @@ function init(){
       setProvider(btn.getAttribute('data-provider'));
     });
   });
+  advModels.addEventListener('change', refreshFailoverVisibility);
   diffModelToggle.addEventListener('change', ()=>{
+    setTimeout(refreshFailoverVisibility, 0);
     advModels.classList.toggle('show', diffModelToggle.checked);
     refreshNodeKeyStatus();
     scheduleSave();

@@ -4,7 +4,7 @@
 //
 // 하는 일
 // - 채팅 요청(POST /v1/chat/completions)과 모델 목록(GET /v1/models)만 FreeLLMAPI로 넘긴다.
-// - GET /admin/status: 파이 상태(CPU 온도, 부하, 메모리, 가동 시간)를 알려 준다. 로그인·허용 계정 확인을 거친다.
+// - GET /admin/status: 파이 상태(CPU 온도·사용률, 부하, 메모리, 가동 시간)를 알려 준다. 로그인·허용 계정 확인을 거친다.
 //   관리 화면(대시보드)을 포함한 나머지 주소는 모두 404로 막는다.
 // - 브라우저가 보낸 Supabase 로그인 토큰을 Supabase에 물어 확인하고,
 //   ALLOWED_USER_IDS에 있는 계정만 통과시킨다. 회원가입은 누구나 할 수 있으므로 "로그인했다"만으로는 통과시키지 않는다.
@@ -167,11 +167,35 @@ function readCpuTempC(){
     return Number.isFinite(v) ? Math.round(v / 100) / 10 : null;
   }catch(e){ return null; }
 }
-function piStatus(){
+// CPU 사용률: 직전 상태 확인 이후 구간의 평균(화면이 3초마다 부르므로 사실상 실시간).
+// 직전 기록이 없거나 오래됐으면 0.3초 동안 재서 계산한다.
+let lastCpu = null;
+function cpuTimes(){
+  let idle = 0, total = 0;
+  for(const c of os.cpus()){
+    const t = c.times;
+    idle += t.idle;
+    total += t.user + t.nice + t.sys + t.idle + t.irq;
+  }
+  return { idle, total, at: Date.now() };
+}
+async function cpuUsagePct(){
+  let a = lastCpu;
+  if(!a || Date.now() - a.at > 30000){
+    a = cpuTimes();
+    await new Promise(r => setTimeout(r, 300));
+  }
+  const b = cpuTimes();
+  lastCpu = b;
+  const dt = b.total - a.total, di = b.idle - a.idle;
+  return dt > 0 ? Math.round((1 - di / dt) * 1000) / 10 : null;
+}
+async function piStatus(){
   const total = os.totalmem(), free = os.freemem();
   return {
     ok: true,
     cpuTempC: readCpuTempC(),
+    cpuUsagePct: await cpuUsagePct(),
     load1: Math.round(os.loadavg()[0] * 100) / 100,
     cpus: os.cpus().length,
     memUsedPct: total ? Math.round((1 - free / total) * 100) : null,
@@ -220,7 +244,7 @@ const server = http.createServer(async (req, res) => {
   // 상태 확인은 가볍고 화면이 주기적으로 부르므로 요청 수 제한에 넣지 않는다.
   if(isStatus){
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(piStatus()));
+    return res.end(JSON.stringify(await piStatus()));
   }
 
   // 2) 요청 수 제한
