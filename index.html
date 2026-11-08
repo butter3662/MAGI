@@ -431,6 +431,13 @@
     padding:9px 10px; border-radius:2px; font-size:11px; margin-bottom:10px; line-height:1.6;
   }
   .env-banner.show{display:block;}
+  .update-bar{position:fixed; left:50%; transform:translateX(-50%); top:calc(env(safe-area-inset-top, 0px) + 10px); z-index:95;
+    display:flex; align-items:center; gap:10px; max-width:calc(100% - 24px); box-sizing:border-box;
+    background:#041009; border:1px solid var(--green-core); box-shadow:0 6px 24px rgba(0,0,0,.6);
+    padding:9px 12px; border-radius:2px; font-size:12px; color:var(--text-main);}
+  .update-bar[hidden]{display:none;}
+  .update-bar button{flex-shrink:0; background:transparent; border:1px solid var(--amber); color:var(--amber);
+    font-family:var(--font-mono); font-size:12px; padding:6px 10px; border-radius:2px; cursor:pointer;}
 
   /* ---------- rounds ---------- */
   .round{margin-top:20px; border-top:1px solid var(--green-line); padding-top:14px;}
@@ -721,6 +728,10 @@
     </div>
   </div>
 </div>
+<div class="update-bar" id="updateBar" hidden>
+    <span id="updateMsg">새 버전이 나왔습니다.</span>
+    <button type="button" id="updateNowBtn">지금 업데이트</button>
+  </div>
 <div class="drawer-scrim" id="drawerScrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true">
   <div class="drawer-head"><span>MAGI // RECORDS</span><button class="drawer-close" id="drawerClose" title="닫기">✕</button></div>
@@ -980,7 +991,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.11</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.12</span></footer>
 </div>
 
 <script>
@@ -4313,8 +4324,74 @@ function connectSupabase(){
     sbUser = data && data.session ? data.session.user : null;
     acctMsg('');
     renderAccount();
+    resumeAfterUpdate();
   });
 }
+/* ---------------------------------------------------------------------
+   Auto update: when a newer build is on GitHub Pages, reload into it.
+   Reloads by itself only when nothing would be lost; otherwise asks.
+--------------------------------------------------------------------- */
+const RUNNING_BUILD = (($('buildTag') || {}).textContent || '').replace(/^BUILD\s*v/i, '').trim();
+const RESUME_KEY = 'magi_resume_after_update';
+function newerBuild(a, b){   // is a newer than b?
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+  for(let i=0; i<3; i++){ if((pa[i]||0) !== (pb[i]||0)) return (pa[i]||0) > (pb[i]||0); }
+  return false;
+}
+let updateTarget = null, updateChecking = false;
+async function checkForUpdate(){
+  if(updateChecking || !RUNNING_BUILD || location.protocol === 'file:') return;
+  updateChecking = true;
+  try{
+    // A fresh query string skips both the browser cache and the Pages CDN copy.
+    const res = await fetch(location.pathname + '?update-check=' + Date.now(), { cache:'no-store' });
+    if(!res.ok) return;
+    const m = (await res.text()).match(/BUILD v(\d+\.\d+\.\d+)/);
+    if(!m || !newerBuild(m[1], RUNNING_BUILD)) return;
+    updateTarget = m[1];
+    if(updateIsSafe()) return applyUpdate();
+    $('updateMsg').textContent = '새 버전 v' + updateTarget + '이(가) 나왔습니다.';
+    $('updateBar').hidden = false;
+  }catch(e){ /* offline: try again later */ }
+  finally{ updateChecking = false; }
+}
+// Nothing on screen that a reload would throw away.
+function updateIsSafe(){
+  return !state.busy && !state.history.length && !questionInput.value.trim() && !state.files.length;
+}
+function applyUpdate(){
+  if(state.busy){ $('updateMsg').textContent = '심의가 끝나면 업데이트할 수 있습니다.'; return; }
+  try{
+    sessionStorage.setItem(RESUME_KEY, JSON.stringify({ sessionId: state.sessionId || null, draft: questionInput.value || '' }));
+  }catch(e){}
+  location.replace(location.pathname + '?v=' + (updateTarget || Date.now()));
+}
+// After an update reload: put the draft back at once, and reopen the conversation
+// that was on screen as soon as the login is known.
+let resumeSessionId = null;
+function restoreDraftAfterUpdate(){
+  let r = null;
+  try{ r = JSON.parse(sessionStorage.getItem(RESUME_KEY) || 'null'); sessionStorage.removeItem(RESUME_KEY); }catch(e){}
+  if(!r) return;
+  if(r.draft && !questionInput.value) questionInput.value = r.draft;
+  resumeSessionId = r.sessionId || null;
+}
+function resumeAfterUpdate(){
+  if(!resumeSessionId || !sbUser) return;
+  const id = resumeSessionId; resumeSessionId = null;
+  openSession(id);
+}
+function startUpdateWatch(){
+  restoreDraftAfterUpdate();
+  $('updateNowBtn').addEventListener('click', applyUpdate);
+  setTimeout(checkForUpdate, 4000);
+  setInterval(()=>{ if(document.visibilityState === 'visible') checkForUpdate(); }, 120000);
+  // Home-screen apps resume without reloading, so check whenever the app comes back.
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'visible') checkForUpdate(); });
+  // A deliberation that just finished may have been the only thing holding an update back.
+  setInterval(()=>{ if(updateTarget && !$('updateBar').hidden && updateIsSafe()) applyUpdate(); }, 5000);
+}
+
 async function acctSignUp(){
   if(!sb) return acctMsg('동기화 서버 설정을 먼저 하세요.', 'var(--red)');
   const email = acctEmail.value.trim(), pw = acctPw.value;
@@ -4669,6 +4746,7 @@ function init(){
   renderAllNodeModelOptions();
   refreshNodeRoles();
   showEnvBannerIfNeeded();
+  startUpdateWatch();
 
   settingsToggle.addEventListener('click', ()=>{
     const showing = settingsBody.classList.toggle('show');
