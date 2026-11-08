@@ -337,6 +337,12 @@
   .save-flash.show{opacity:1;}
   .key-check-result{font-size:10px; margin-top:4px; min-height:12px; letter-spacing:0.3px;}
   .hint{font-size:9.5px; color:var(--text-dim); margin-top:5px; line-height:1.5;}
+  /* Personal-server rows: same-size buttons, text beside them, clear gap between rows. */
+  #piStatusRow, #piPowerRow{align-items:center; gap:10px;}
+  #piStatusRow{margin-top:12px;}
+  #piPowerRow{margin-top:10px;}
+  #piStatusBtn, #piPowerBtn{height:34px; width:104px; padding:0 6px; align-self:center;}
+  #piStatusRow .hint, #piPowerRow .hint{margin-top:0;}
   .pi-status b{font-weight:400;}
   .pi-status .t-ok{color:var(--green-core);} .pi-status .t-warm{color:var(--amber);} .pi-status .t-hot{color:var(--red);}
 
@@ -948,7 +954,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.7</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.8</span></footer>
 </div>
 
 <script>
