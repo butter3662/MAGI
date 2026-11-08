@@ -1,0 +1,9 @@
+[Unit]
+Description=MAGI 개인 서버 월간 업데이트 + 재시작
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/magi-monthly-update.sh
+TimeoutStartSec=1h

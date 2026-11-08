@@ -430,7 +430,7 @@ sudo bash ~/MAGI/pi-gateway/setup-auto-update.sh
 ```
 
 Debian 표준 도구(unattended-upgrades)로 **보안 업데이트만** 매일 자동 설치한다. 자동 재시작은 하지 않는다.
-커널처럼 재시작해야 적용되는 업데이트는 한 달에 한 번쯤 `sudo apt update && sudo apt full-upgrade`를 한 뒤 MAGI의 '재시작' 버튼으로 적용한다.
+그 밖의 업데이트(라즈베리파이 커널·펌웨어 포함)는 `update.sh`가 설치하는 **월간 업데이트 예약**(`magi-monthly-update.timer`)이 매월 1일 17:00(한국 시간)에 전체 업데이트 후 재시작한다. 국내·미국 주식시장이 모두 닫힌 시간이다. 그 시각에 파이가 꺼져 있으면 그달은 건너뛴다. 기록: `/var/log/magi-monthly-update.log`, 다음 예정 시각: `systemctl list-timers magi-monthly-update.timer`.
 Docker 안의 FreeLLMAPI는 여기에 포함되지 않는다.
 
 ## 업데이트
