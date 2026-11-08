@@ -942,7 +942,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.4</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.5</span></footer>
 </div>
 
 <script>
@@ -4467,7 +4467,11 @@ function init(){
     if(b && b !== piPowerBtn) resetPiPowerResult();
   });
   apiKeyInput.addEventListener('input', resetPiPowerResult);
-  fetchModelsBtn.addEventListener('click', ()=>{ openModelDrop(); loadModelList(); });
+  // 목록 toggles the list: first tap opens it (and refreshes), second tap closes it.
+  fetchModelsBtn.addEventListener('click', ()=>{
+    if(!modelDrop.hidden){ closeModelDrop(); return; }
+    openModelDrop(); loadModelList();
+  });
   checkModelsBtn.addEventListener('click', checkAllModels);
   codeRefToggle.addEventListener('click', ()=>{
     const on = codeRef.classList.toggle('show');
@@ -4504,8 +4508,6 @@ function init(){
     renderSharedModelOptions();
     renderAllNodeModelOptions();
   });
-  modelFilter.addEventListener('focus', openModelDrop);
-  modelFilter.addEventListener('click', openModelDrop);
   modelDrop.addEventListener('click', (e)=>{
     const it = e.target.closest('.md-item');
     if(it) pickSharedModel(it.getAttribute('data-id'));
