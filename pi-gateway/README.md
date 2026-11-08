@@ -438,6 +438,8 @@ sudo cp /home/pi/MAGI/pi-gateway/gateway.mjs /opt/magi-gateway/gateway.mjs
 sudo systemctl restart magi-gateway
 ```
 
+MAGI 설정 화면의 "상태 확인"(CPU 온도 등)은 문지기의 `GET /admin/status`를 씁니다. 버튼을 눌렀을 때 "문지기를 업데이트하세요"가 나오면 위 세 줄을 실행하면 됩니다.
+
 ## 백업 (SD 카드 고장 대비)
 
 ```bash

@@ -4,6 +4,7 @@
 //
 // 하는 일
 // - 채팅 요청(POST /v1/chat/completions)과 모델 목록(GET /v1/models)만 FreeLLMAPI로 넘긴다.
+// - GET /admin/status: 파이 상태(CPU 온도, 부하, 메모리, 가동 시간)를 알려 준다. 로그인·허용 계정 확인을 거친다.
 //   관리 화면(대시보드)을 포함한 나머지 주소는 모두 404로 막는다.
 // - 브라우저가 보낸 Supabase 로그인 토큰을 Supabase에 물어 확인하고,
 //   ALLOWED_USER_IDS에 있는 계정만 통과시킨다. 회원가입은 누구나 할 수 있으므로 "로그인했다"만으로는 통과시키지 않는다.
@@ -16,6 +17,7 @@
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
 import fs from 'node:fs';
+import os from 'node:os';
 
 const env = process.env;
 const PORT = Number(env.PORT || 8787);
@@ -157,6 +159,26 @@ async function forward(req, res, path, body){
   }
 }
 
+/* ---------- 파이 상태 ---------- */
+function readCpuTempC(){
+  // 라즈베리파이 OS는 SoC 온도를 1/1000 ℃ 단위로 여기에 둔다.
+  try{
+    const v = Number(fs.readFileSync('/sys/class/thermal/thermal_zone0/temp', 'utf8').trim());
+    return Number.isFinite(v) ? Math.round(v / 100) / 10 : null;
+  }catch(e){ return null; }
+}
+function piStatus(){
+  const total = os.totalmem(), free = os.freemem();
+  return {
+    ok: true,
+    cpuTempC: readCpuTempC(),
+    load1: Math.round(os.loadavg()[0] * 100) / 100,
+    cpus: os.cpus().length,
+    memUsedPct: total ? Math.round((1 - free / total) * 100) : null,
+    uptimeSec: Math.round(os.uptime())
+  };
+}
+
 /* ---------- 서버 ---------- */
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://local');
@@ -176,7 +198,8 @@ const server = http.createServer(async (req, res) => {
   const isChat = req.method === 'POST' && path === '/v1/chat/completions';
   const isModels = req.method === 'GET' && path === '/v1/models';
   const isPoweroff = req.method === 'POST' && path === '/admin/poweroff';
-  if(!isChat && !isModels && !isPoweroff) return fail(res, 404, '없는 주소입니다.');
+  const isStatus = req.method === 'GET' && path === '/admin/status';
+  if(!isChat && !isModels && !isPoweroff && !isStatus) return fail(res, 404, '없는 주소입니다.');
 
   // 1) 로그인 확인
   const auth = req.headers.authorization || '';
@@ -192,6 +215,12 @@ const server = http.createServer(async (req, res) => {
   if(!ALLOWED_USER_IDS.has(who.uid)){
     console.warn('[gateway] 거절: 허용 목록에 없는 계정 id=' + who.uid + ' email=' + who.email);
     return fail(res, 403, '이 개인 서버를 쓸 수 있는 계정이 아닙니다 (유효하지 않은 사용자).');
+  }
+
+  // 상태 확인은 가볍고 화면이 주기적으로 부르므로 요청 수 제한에 넣지 않는다.
+  if(isStatus){
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(piStatus()));
   }
 
   // 2) 요청 수 제한
