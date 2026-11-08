@@ -502,14 +502,15 @@
   .menu-btn{width:34px; height:28px; display:flex; flex-direction:column; justify-content:center; gap:5px;
     padding:0 7px; background:transparent; border:1px solid var(--green-dim); border-radius:2px; cursor:pointer;}
   .menu-btn span{display:block; height:2px; background:var(--green-core); border-radius:1px; box-shadow:0 0 4px var(--green-core);}
-  .drawer-scrim{position:fixed; inset:0; z-index:69; background:rgba(0,0,0,0.6);
+  .drawer-scrim{position:fixed; inset:0; z-index:69; background:rgba(0,0,0,0.6); touch-action:none;
     opacity:0; pointer-events:none; transition:opacity .3s ease;}
   .drawer-scrim.show{opacity:1; pointer-events:auto;}
   .drawer{position:fixed; top:0; right:0; bottom:0; z-index:70; width:min(86vw,340px);
     background:#030a06; border-left:1px solid var(--green-core);
     box-shadow:-10px 0 34px rgba(61,255,198,0.10);
     transform:translateX(105%); transition:transform .38s cubic-bezier(.2,.85,.25,1);
-    display:flex; flex-direction:column; padding:16px 14px 24px; overflow-y:auto;}
+    display:flex; flex-direction:column; padding:16px 14px 24px; overflow-y:auto;
+    overscroll-behavior:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y;}
   .drawer.show{transform:translateX(0);}
   .drawer-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;
     font-family:var(--font-display); font-size:12px; letter-spacing:2px; color:var(--green-core);}
@@ -941,7 +942,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.3</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.4</span></footer>
 </div>
 
 <script>
@@ -2654,7 +2655,10 @@ async function loadModelList(){
   modelListResult.textContent = '';
 
   const ok = [], failed = [];
-  for(const p of targets){
+  modelListResult.textContent = '목록을 불러오는 중...';
+  modelListResult.style.color = 'var(--text-dim)';
+  // All providers at once; the open list refreshes as soon as the active one arrives.
+  await Promise.all(targets.map(async p=>{
     try{
       const ids = await fetchModelList(p, sanitizeKey(state.keys[p]||''));
       if(ids.length){ state.modelCache[p] = ids; ok.push(PROVIDERS[p].label + ' ' + ids.length); }
@@ -2662,7 +2666,8 @@ async function loadModelList(){
     }catch(e){
       failed.push(PROVIDERS[p].label);
     }
-  }
+    if(p === active && !modelDrop.hidden) renderModelDrop();
+  }));
 
   const activeIds = state.modelCache[active];
   if(activeIds && activeIds.indexOf(modelShared.value.trim()) === -1) modelShared.value = activeIds[0];
@@ -4288,14 +4293,31 @@ async function deleteSession(id){
   loadSessionList();
 }
 const drawer = $('drawer'), drawerScrim = $('drawerScrim');
+// iOS Safari scrolls the page under a fixed panel unless the page itself is pinned.
+let pageLockY = null;
+function lockPageScroll(){
+  if(pageLockY !== null) return;
+  pageLockY = window.scrollY || window.pageYOffset || 0;
+  const b = document.body.style;
+  b.position = 'fixed'; b.top = (-pageLockY) + 'px'; b.left = '0'; b.right = '0'; b.width = '100%';
+}
+function unlockPageScroll(){
+  if(pageLockY === null) return;
+  const b = document.body.style;
+  b.position = ''; b.top = ''; b.left = ''; b.right = ''; b.width = '';
+  window.scrollTo(0, pageLockY);
+  pageLockY = null;
+}
 function openDrawer(){
   drawer.classList.add('show'); drawerScrim.classList.add('show');
   drawer.setAttribute('aria-hidden','false');
+  lockPageScroll();
   if(sbUser) loadSessionList();
 }
 function closeDrawer(){
   drawer.classList.remove('show'); drawerScrim.classList.remove('show');
   drawer.setAttribute('aria-hidden','true');
+  unlockPageScroll();
 }
 function initAccount(){
   $('menuBtn').addEventListener('click', openDrawer);
@@ -4445,7 +4467,7 @@ function init(){
     if(b && b !== piPowerBtn) resetPiPowerResult();
   });
   apiKeyInput.addEventListener('input', resetPiPowerResult);
-  fetchModelsBtn.addEventListener('click', async ()=>{ await loadModelList(); openModelDrop(); });
+  fetchModelsBtn.addEventListener('click', ()=>{ openModelDrop(); loadModelList(); });
   checkModelsBtn.addEventListener('click', checkAllModels);
   codeRefToggle.addEventListener('click', ()=>{
     const on = codeRef.classList.toggle('show');
@@ -4489,9 +4511,14 @@ function init(){
     if(it) pickSharedModel(it.getAttribute('data-id'));
   });
   // Tapping anywhere outside the search row and its list closes the list.
-  document.addEventListener('pointerdown', (e)=>{
-    if(modelDrop.hidden) return;
-    if(modelDrop.contains(e.target) || e.target === modelFilter || e.target === fetchModelsBtn) return;
+  let downAt = null;
+  document.addEventListener('pointerdown', (e)=>{ downAt = { x:e.clientX, y:e.clientY }; });
+  document.addEventListener('pointerup', (e)=>{
+    const start = downAt; downAt = null;
+    if(modelDrop.hidden || !start) return;
+    if(Math.abs(e.clientX - start.x) > 10 || Math.abs(e.clientY - start.y) > 10) return;   // a scroll, not a tap
+    const t = e.target;
+    if(modelDrop.contains(t) || modelFilter.contains(t) || fetchModelsBtn.contains(t)) return;
     closeModelDrop();
   });
   freeOnlyToggle.addEventListener('change', ()=>{
