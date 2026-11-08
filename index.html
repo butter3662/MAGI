@@ -980,7 +980,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.10</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.11</span></footer>
 </div>
 
 <script>
@@ -2745,6 +2745,7 @@ async function autoLoadOpenRouterModels(){
   }catch(e){ /* offline or blocked - fall back to the built-in list */ }
 }
 
+let modelListLoading = false;
 async function loadModelList(){
   const active = state.provider;
   syncCurrentKey();
@@ -2763,9 +2764,9 @@ async function loadModelList(){
     return;
   }
 
-  fetchModelsBtn.disabled = true;
-  const prev = fetchModelsBtn.textContent;
-  fetchModelsBtn.textContent = '...';
+  // The button stays usable while loading (it toggles the list); just don't start a second load.
+  if(modelListLoading) return;
+  modelListLoading = true;
   modelListResult.textContent = '';
 
   const ok = [], failed = [];
@@ -2797,8 +2798,7 @@ async function loadModelList(){
     modelListResult.textContent = '✗ 목록을 불러오지 못했습니다. 키가 맞는지 확인하세요.';
     modelListResult.style.color = 'var(--red)';
   }
-  fetchModelsBtn.disabled = false;
-  fetchModelsBtn.textContent = prev;
+  modelListLoading = false;
 }
 
 /* ---------------------------------------------------------------------
