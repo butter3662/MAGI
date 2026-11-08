@@ -341,9 +341,12 @@
   #piStatusRow, #piPowerRow{align-items:center; gap:10px;}
   #piStatusRow{margin-top:12px;}
   #piPowerRow{margin-top:10px;}
-  #piStatusBtn, #piPowerBtn{height:34px; width:104px; padding:0 6px; align-self:center;}
+  #piPowerBtn{height:34px; width:104px; padding:0 6px; align-self:center;}
+  #piStatusRow .pi-status{font-size:11px; line-height:1.6;}
   #piStatusRow .hint, #piPowerRow .hint{margin-top:0;}
   .pi-status b{font-weight:400;}
+  .pi-status .live-dot{color:var(--green-core); font-size:8px; vertical-align:middle; animation:liveBlink 1.6s ease-in-out infinite;}
+  @keyframes liveBlink{0%,100%{opacity:1;} 50%{opacity:.25;}}
   .pi-status .t-ok{color:var(--green-core);} .pi-status .t-warm{color:var(--amber);} .pi-status .t-hot{color:var(--red);}
 
   .provider-tabs{display:grid; grid-template-columns:repeat(5,1fr); gap:5px;}
@@ -862,7 +865,6 @@
     <div class="key-check-result" id="keyCheckResult"></div>
     <div class="hint" id="keyHint"></div>
     <div class="keyrow" id="piStatusRow" style="display:none">
-      <button class="iconbtn" id="piStatusBtn" type="button">상태 확인</button>
       <span class="hint pi-status" id="piStatus"></span>
     </div>
     <div class="keyrow" id="piPowerRow" style="display:none">
@@ -954,7 +956,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.8</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.9</span></footer>
 </div>
 
 <script>
@@ -1121,7 +1123,7 @@ const apiKeyInput = $('apiKeyInput');
 const toggleKeyVis = $('toggleKeyVis');
 const verifyKeyBtn = $('verifyKeyBtn');
 const piPowerRow = $('piPowerRow');
-const piStatusRow = $('piStatusRow'), piStatusBtn = $('piStatusBtn'), piStatusEl = $('piStatus');
+const piStatusRow = $('piStatusRow'), piStatusEl = $('piStatus');
 const piPowerBtn = $('piPowerBtn');
 const piPowerResult = $('piPowerResult');
 const keyCheckResult = $('keyCheckResult');
@@ -2219,12 +2221,13 @@ function fmtUptime(sec){
   const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
   return (d ? d + '일 ' : '') + (d || h ? h + '시간 ' : '') + m + '분';
 }
-let piStatusBusy = false;
+let piStatusBusy = false, piStatusFailed = false;
 async function fetchPiStatus(quiet){
   const addr = keyFor('pi');
   if(!addr){ piStatusEl.textContent = '개인 서버 주소를 넣으면 CPU 온도를 볼 수 있습니다.'; piStatusEl.style.color = ''; return; }
   if(piStatusBusy) return;
   piStatusBusy = true;
+  piStatusFailed = true;   // cleared below on a good answer
   if(!quiet){ piStatusEl.textContent = '확인 중...'; piStatusEl.style.color = ''; }
   try{
     const res = await fetch(piBase(addr) + '/admin/status', { headers:{ 'Authorization':'Bearer ' + await piToken() }, cache:'no-store' });
@@ -2239,6 +2242,7 @@ async function fetchPiStatus(quiet){
       piStatusEl.style.color = 'var(--red)';
       return;
     }
+    piStatusFailed = false;
     const t = j.cpuTempC;
     const cls = t == null ? '' : (t >= 80 ? 't-hot' : t >= 70 ? 't-warm' : 't-ok');
     piStatusEl.style.color = '';
@@ -2247,7 +2251,7 @@ async function fetchPiStatus(quiet){
       ' · 부하 ' + (j.load1 != null ? j.load1 : '-') + (j.cpus ? '/' + j.cpus + '코어' : '') +
       ' · 메모리 ' + (j.memUsedPct != null ? j.memUsedPct + '%' : '-') +
       ' · 가동 ' + (j.uptimeSec != null ? fmtUptime(j.uptimeSec) : '-') +
-      ' <span style="opacity:.6">(' + new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ')</span>';
+      ' <span class="live-dot" title="3초마다 갱신">●</span>';
   }catch(e){
     piStatusEl.textContent = '✗ ' + (e.code === '014' ? e.message.replace(/\s*\[\d+\]$/,'') : networkErrorMessage(PROVIDERS.pi.label));
     piStatusEl.style.color = 'var(--red)';
@@ -4535,12 +4539,29 @@ function init(){
   });
   verifyKeyBtn.addEventListener('click', verifyApiKey);
   piPowerBtn.addEventListener('click', powerOffPersonalServer);
-  piStatusBtn.addEventListener('click', ()=>fetchPiStatus(false));
-  // Refresh every 15 s while the personal-server settings are on screen.
-  setInterval(()=>{
-    if(state.provider === 'pi' && document.visibilityState === 'visible' &&
-       settingsBody.classList.contains('show') && piStatusRow.style.display !== 'none') fetchPiStatus(true);
-  }, 15000);
+  // Live status: poll every 3 s while the personal-server settings are on screen,
+  // backing off to 10 s after a failure (server off, offline) so errors don't spam.
+  (function livePiStatus(){
+    const onScreen = state.provider === 'pi' && document.visibilityState === 'visible' &&
+      settingsBody.classList.contains('show') && piStatusRow.style.display !== 'none';
+    const next = ()=>setTimeout(livePiStatus, piStatusFailed ? 10000 : 3000);
+    if(!onScreen) return next();
+    fetchPiStatus(true).finally(next);
+  })();
+  // Typing or pasting the address shows the status right away.
+  let piAddrTimer = null;
+  apiKeyInput.addEventListener('input', ()=>{
+    if(state.provider !== 'pi') return;
+    clearTimeout(piAddrTimer);
+    piAddrTimer = setTimeout(()=>{ syncCurrentKey(); fetchPiStatus(true); }, 700);
+  });
+  // Coming back to the tab or opening settings refreshes at once instead of waiting.
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible' && state.provider === 'pi' && settingsBody.classList.contains('show')) fetchPiStatus(true);
+  });
+  settingsToggle.addEventListener('click', ()=>{
+    if(state.provider === 'pi' && settingsBody.classList.contains('show')) fetchPiStatus(true);
+  });
   resetPiPowerResult();
   // The shutdown result is about that one press: any other settings button
   // (키 확인, 목록, 전체확인, tabs...) or editing the address puts the hint back.
