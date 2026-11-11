@@ -620,6 +620,9 @@
   .card details p, .card details ul, .card details ol{margin-top:6px;}
   .hl{color:var(--green-bright); font-weight:700;}
   .card-head .ai.fo{color:var(--amber); border-color:var(--amber-dim);}
+  .served-note{font-size:9.5px; color:var(--text-dim); margin:-2px 0 7px; line-height:1.5; overflow-wrap:anywhere;}
+  .served-note b{color:var(--green-bright); font-weight:700;}
+  .final-box .served-note{margin:0 0 8px;}
   .fo-note{font-size:9.5px; color:var(--amber); border:1px dashed var(--amber-dim);
     border-radius:2px; padding:4px 6px; margin:5px 0 7px; line-height:1.5;}
   .partial-note{
@@ -992,7 +995,7 @@
     <div class="save-flash" id="saveFlash">설정 저장됨</div>
   </div>
 
-  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.15</span></footer>
+  <footer class="note">MAGI SYSTEM // TRI-NODE CONSENSUS ENGINE<br><span id="buildTag">BUILD v2.2.16</span></footer>
 </div>
 
 <script>
@@ -2372,7 +2375,24 @@ async function callPi(addr, model, sys, user, temperature, maxTokens, atts, opts
     const m = String((data.error.message || data.error) || '');
     const e = new Error(PROVIDERS.pi.label + ' — ' + m + '  [012]'); e.code = '012'; throw e;
   }
+  if(opts) opts.served = servedModelOf(data, model);
   return stripThinking(extractAnyText(data, false));
+}
+// FreeLLMAPI tags each reply with the model it actually routed to
+// (_routed_via: {platform, model}); the standard "model" field is the fallback.
+// Returns null when it is just the model the user picked.
+function servedModelOf(data, requested){
+  const rv = data && typeof data._routed_via === 'object' ? data._routed_via : null;
+  let model = rv && typeof rv.model === 'string' ? rv.model.trim() : '';
+  const platform = rv && typeof rv.platform === 'string' ? rv.platform.trim() : '';
+  if(!model && data && typeof data.model === 'string') model = data.model.trim();
+  if(!model || model === requested || /^auto(:|$)/.test(model)) return null;
+  return { model: model.slice(0, 120), platform: platform.slice(0, 40) };
+}
+function servedNote(sv){
+  if(!sv || !sv.model) return '';
+  return '<div class="served-note">응답 모델 · <b>' + escapeHtml(sv.model) + '</b>' +
+    (sv.platform ? ' <span>(' + escapeHtml(sv.platform) + ')</span>' : '') + '</div>';
 }
 // Some open models put their thinking inside the answer as <think>...</think>.
 function stripThinking(text){
@@ -2541,14 +2561,16 @@ async function callGemini(apiKey, model, sys, user, temperature, maxTokens, atts
 const RETRY_NOTE = '\n\n[재요청] 앞선 응답이 형식에 맞지 않았습니다. 지정된 JSON 객체 하나만 출력하십시오. 머리말, 설명, 코드블록, 안전 관련 메타데이터(safety 등)를 절대 포함하지 마십시오.';
 
 async function callAndParse(provider, apiKey, model, sys, user, temp, maxTok, requiredKeys, atts, opts){
-  let lastErr = null, lastRaw = '';
+  let lastErr = null, lastRaw = '', lastServed = null;
   for(let attempt=0; attempt<2; attempt++){
     if(attempt === 1 && timeLeft(opts) < 60000) break;   // not enough time left for a second try
     const u = attempt===0 ? user : (user + RETRY_NOTE);
     // A failed parse is most often a truncated reply, so give it more room.
     const budget = attempt===0 ? maxTok : maxTok * 2;
     try{
+      if(opts) opts.served = null;
       const raw = await callModel(provider, apiKey, model, sys, u, temp, budget, atts, opts);
+      const served = (opts && opts.served) || null;
       // A real successful call is the strongest possible evidence this
       // provider+model works right now — stronger than a synthetic probe.
       // Stamping it here means an immediate follow-up question doesn't
@@ -2557,9 +2579,9 @@ async function callAndParse(provider, apiKey, model, sys, user, temp, maxTok, re
       const stampedId = (atts && atts.length) ? baseId + '|att' : baseId;
       state.probeCache[stampedId] = { code:'000', ts: Date.now() };
       if(stampedId !== baseId) state.probeCache[baseId] = { code:'000', ts: Date.now() };
-      lastRaw = raw;
+      lastRaw = raw; lastServed = served;
       const parsed = safeParseJSON(raw, requiredKeys);
-      if(parsed) return { parsed: parsed, raw: raw };
+      if(parsed) return { parsed: parsed, raw: raw, served: served };
       lastErr = new Error('모델이 JSON 형식으로 답하지 않았습니다.');
     }catch(err){
       lastErr = err;
@@ -2571,7 +2593,7 @@ async function callAndParse(provider, apiKey, model, sys, user, temp, maxTok, re
     }
   }
   // Got text but could not parse it: keep the text rather than failing the node.
-  if(lastRaw) return { parsed: null, raw: lastRaw };
+  if(lastRaw) return { parsed: null, raw: lastRaw, served: lastServed };
   throw lastErr || new Error('연산에 실패했습니다.');
 }
 /* --- dispatcher --- */
@@ -3251,6 +3273,7 @@ function buildRoundDOM(n, question, fileNames){
       '<div class="stamp pending" data-role="stamp">보류</div>' +
       '<div class="final-box">' +
         '<div class="lbl" data-role="anslbl">FINAL_ANSWER ── 통합 판단 AI</div>' +
+        '<div data-role="served"></div>' +
         '<div class="answer" data-role="answer"></div>' +
         '<div class="lbl">REASONING ── 판단 근거</div>' +
         '<div class="reasoning" data-role="reasoning"></div>' +
@@ -3274,7 +3297,7 @@ function cardEl(key, phase){
   }
   return el;
 }
-function cardHead(node, right, rightCls, slotKey){
+function cardHead(node, right, rightCls, slotKey, served){
   let ai = '', foNote = '';
   if(slotKey){
     const c = runConfig(slotKey);
@@ -3294,7 +3317,7 @@ function cardHead(node, right, rightCls, slotKey){
       '<span class="rl">' + node.kr + '</span>' +
       ai +
       '<span class="cf ' + (rightCls||'') + '">' + right + '</span>' +
-    '</div>' + foNote;
+    '</div>' + servedNote(served) + foNote;
 }
 function renderLoadingCard(key, phase){
   const node = NODES[key];
@@ -3328,7 +3351,7 @@ function renderPhase1Card(key, data, rawText){
   const node = NODES[key];
   const el = cardEl(key, 'p1');
   el.classList.remove('err');
-  el.innerHTML = cardHead(node, data.confidence + '%', '', key) +
+  el.innerHTML = cardHead(node, data.confidence + '%', '', key, data.served) +
     partialNote(data) +
     '<div class="confbar-track"><div class="confbar-fill" style="width:' + data.confidence + '%"></div></div>' +
     mdLite(data.answer) +
@@ -3384,7 +3407,7 @@ function renderPhase2Card(key, data, prevConf, rawText, allResults){
               mdLite(data.critique) + '</details>';
   }
 
-  el.innerHTML = cardHead(node, txt, cls, key) +
+  el.innerHTML = cardHead(node, txt, cls, key, data.served) +
     partialNote(data) +
     '<div class="confbar-track"><div class="confbar-fill" style="width:' + data.confidence + '%"></div></div>' +
     recvHtml +
@@ -3437,6 +3460,8 @@ function renderFinal(fin, p2results){
     : 'FINAL_ANSWER ── 통합 판단 AI';
   const foS = runConfig('supreme');
   if(lbl && foS.replaced) lbl.textContent += ' · 자동 대체: ' + PROVIDERS[foS.provider].label + ' ' + foS.model;
+  const sv = wrap.querySelector('[data-role="served"]');
+  if(sv) sv.innerHTML = servedNote(fin.served);
   wrap.querySelector('[data-role="answer"]').innerHTML = mdLite(fin.final_answer);
   wrap.querySelector('[data-role="reasoning"]').innerHTML = mdLite(fin.reasoning);
   renderMathIn(wrap);
@@ -3536,6 +3561,7 @@ async function runPhase1(question, atts){
         state.raw[k] = state.raw[k] || {}; state.raw[k].p1 = r.raw;
         const res = normalizeNodeResult(r.parsed, r.raw);
         res.visualChecks = extractVisualChecks(r.parsed);
+        res.served = r.served || null;
         return res;
       });
   });
@@ -3576,7 +3602,9 @@ async function runPhase2(question, phase1Results){
                         tempFor(k), 2600, ['answer','conclusion','결론'])
       .then(r=>{
         state.raw[k] = state.raw[k] || {}; state.raw[k].p2 = r.raw;
-        return normalizeNodeResult(r.parsed, r.raw);
+        const res = normalizeNodeResult(r.parsed, r.raw);
+        res.served = r.served || null;
+        return res;
       });
   });
   const settled = await Promise.allSettled(tasks);
@@ -3614,7 +3642,9 @@ async function runFinal(question, phase2Results){
   const r = await callSlot('supreme', null, sysForSupreme(),
                                prompt + (state.roundVQA || ''), 0.4, 1800, ['final_answer','finalAnswer','verdict','판정']);
   state.raw.supreme = r.raw;
-  return normalizeFinalResult(r.parsed, r.raw);
+  const fin = normalizeFinalResult(r.parsed, r.raw);
+  fin.served = r.served || null;
+  return fin;
 }
 
 /* --- follow-up context --- */
